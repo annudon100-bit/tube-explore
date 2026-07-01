@@ -413,6 +413,70 @@ def get_task_result(task_id: str):
     return TaskResultResponse(task_id=task.id, status=task.status, files=files)
 
 
+@app.post("/api/tasks/{task_id}/cancel", summary="Cancel task", description="Cancel a pending or running task. Sets status to `cancelled` so the result is discarded.", tags=["Tasks"])
+def cancel_task(task_id: str):
+    with _lock:
+        task = _tasks.get(task_id)
+        if not task:
+            raise HTTPException(404, "Task not found")
+        if task.status not in ("pending", "running"):
+            raise HTTPException(409, f"Cannot cancel task in status '{task.status}'")
+        _update_task(task_id, status="cancelled")
+    return OkResponse(ok=True)
+
+
+def _re_run_task(task: TaskInfo) -> str:
+    gs = _make_settings(db.get_all_settings())
+    params = task.params
+    if task.type == "video":
+        body = DownloadVideoRequest.model_validate(params)
+        profile = _resolve_profile(body.profile, body)
+        conversion_preset = _resolve_convert_preset(body)
+        out = _resolve_output_path(body, profile)
+        tid = _create_task("video", body.url, body.model_dump(by_alias=True))
+        _run_in_background(
+            tid, ytdlp.download_video, body.url, output_dir=out, profile=profile,
+            settings=gs, audio_only=body.audio_only, conversion_preset=conversion_preset, task_id=tid,
+        )
+        return tid
+    # playlist
+    pl_body = DownloadPlaylistRequest.model_validate(params)
+    profile = _resolve_profile(pl_body.profile, pl_body)
+    conversion_preset = _resolve_convert_preset(pl_body)
+    out = _resolve_output_path(pl_body, profile)
+    tid = _create_task("playlist", pl_body.url, pl_body.model_dump(by_alias=True))
+    _run_in_background(
+        tid, ytdlp.download_playlist, pl_body.url, output_dir=out, profile=profile,
+        settings=gs, video_range=pl_body.range, audio_only=pl_body.audio_only,
+        conversion_preset=conversion_preset, task_id=tid,
+    )
+    return tid
+
+
+@app.post("/api/tasks/{task_id}/retry", response_model=DownloadTaskCreatedResponse, summary="Retry task", description="Retry a failed download task. Creates a new task with the same parameters and returns the new task ID and status URLs.", tags=["Tasks"])
+def retry_task(task_id: str):
+    with _lock:
+        task = _tasks.get(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    if task.status != "failed":
+        raise HTTPException(409, f"Cannot retry task in status '{task.status}'")
+    tid = _re_run_task(task)
+    return DownloadTaskCreatedResponse(task_id=tid, status="pending", status_url=f"/api/tasks/{tid}", stream_url=f"/api/tasks/{tid}/stream")
+
+
+@app.delete("/api/tasks/{task_id}", response_model=OkResponse, summary="Delete task", description="Remove a completed, failed, or cancelled task from memory.", tags=["Tasks"])
+def delete_task(task_id: str):
+    with _lock:
+        task = _tasks.get(task_id)
+        if not task:
+            raise HTTPException(404, "Task not found")
+        if task.status in ("pending", "running"):
+            raise HTTPException(409, f"Cannot delete task in status '{task.status}'")
+        del _tasks[task_id]
+    return OkResponse(ok=True)
+
+
 # ── Profiles ─────────────────────────────────────────────────
 
 
