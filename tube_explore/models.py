@@ -158,6 +158,7 @@ class TaskInfo(BaseModel):
     url: str
     params: dict[str, object] = {}
     status: str = "pending"
+    progress_percent: int = 0
     created_at: datetime
     updated_at: datetime | None = None
     completed_at: datetime | None = None

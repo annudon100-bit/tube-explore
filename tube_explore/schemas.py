@@ -166,6 +166,7 @@ class TaskResponse(BaseModel):
     url: str
     params: dict[str, object] = {}
     status: str = "pending"
+    progress_percent: int = Field(0, validation_alias="progressPercent")
     created_at: datetime
     updated_at: datetime | None = None
     completed_at: datetime | None = None

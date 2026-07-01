@@ -178,6 +178,7 @@ def _create_task(task_type: str, url: str, params: dict[str, object]) -> str:
         url=url,
         params=params,
         status="pending",
+        progress_percent=0,
         created_at=datetime.now(UTC),
         error=None,
         completed_at=None,
@@ -204,25 +205,25 @@ def _update_task(tid: str, **kwargs):
 
 def _run_in_background(tid: str, fn, *args, **kwargs):
     def wrapper():
-        _update_task(tid, status="running")
+        _update_task(tid, status="running", progress_percent=50)
         try:
             result = fn(*args, **kwargs)
             if not result:
-                _update_task(tid, status="completed")
+                _update_task(tid, status="completed", progress_percent=100)
                 return
             outbox = result.get("outbox")
             converted = result.get("converted")
             files = result.get("files")
             if outbox:
-                _update_task(tid, status="completed", error=f"Files routed to outbox: {outbox}")
+                _update_task(tid, status="completed", error=f"Files routed to outbox: {outbox}", progress_percent=100)
             elif converted:
-                _update_task(tid, status="completed", error=f"Converted to: {converted}", result=files)
+                _update_task(tid, status="completed", error=f"Converted to: {converted}", result=files, progress_percent=100)
             elif files:
-                _update_task(tid, status="completed", result=files)
+                _update_task(tid, status="completed", result=files, progress_percent=100)
             else:
-                _update_task(tid, status="completed")
+                _update_task(tid, status="completed", progress_percent=100)
         except Exception as e:
-            _update_task(tid, status="failed", error=str(e))
+            _update_task(tid, status="failed", error=str(e), progress_percent=100)
 
     t = threading.Thread(target=wrapper, daemon=True)
     t.start()
