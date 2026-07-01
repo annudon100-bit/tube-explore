@@ -242,7 +242,6 @@ def _run_conversion(dl_dir: str, preset: ConversionPreset) -> str | None:
 def _resolve_dir(
     profile_dir: str,
     request_dir: str | None,
-    settings: SettingsDict,
 ) -> str:
     if request_dir:
         return request_dir
@@ -290,10 +289,6 @@ def _download_with_profile(
 
     result: dict[str, Any] = {}
 
-    if temp_dir and final_dir != temp_dir:
-        _move_downloads(dl_dir, final_dir)
-        dl_dir = final_dir
-
     if conversion_preset and HAS_FFMPEG:
         try:
             converted = _run_conversion(dl_dir, conversion_preset)
@@ -307,6 +302,11 @@ def _download_with_profile(
     if not HAS_FFMPEG and not audio_only:
         _route_to_outbox(dl_dir, outbox_dir)
         result["outbox"] = outbox_dir
+        return result
+
+    if dl_dir != final_dir:
+        os.makedirs(final_dir, exist_ok=True)
+        _move_downloads(dl_dir, final_dir)
 
     return result
 
@@ -436,7 +436,7 @@ def download_video(
     if settings is None:
         settings = SettingsDict()
 
-    out = _resolve_dir(profile.download_directory, output_dir, settings)
+    out = _resolve_dir(profile.download_directory, output_dir)
     return _download_with_profile(url, out, profile, settings, is_playlist=False, audio_only=audio_only, conversion_preset=conversion_preset)
 
 
@@ -454,7 +454,7 @@ def download_playlist(
     if settings is None:
         settings = SettingsDict()
 
-    out = _resolve_dir(profile.download_directory, output_dir, settings)
+    out = _resolve_dir(profile.download_directory, output_dir)
     return _download_with_profile(
         url, out, profile, settings, is_playlist=True, video_range=video_range, audio_only=audio_only, conversion_preset=conversion_preset
     )

@@ -237,6 +237,15 @@ def _resolve_convert_preset(body) -> ConversionPreset | None:
     return preset
 
 
+def _resolve_output_path(body, profile: Profile) -> str:
+    if getattr(body, "download_path_override", None):
+        return body.download_path_override
+    base = profile.download_directory or os.getcwd()
+    if getattr(body, "output_dir", None):
+        return os.path.join(base, body.output_dir)
+    return base
+
+
 # ── Search / Metadata / Playlist ─────────────────────────────
 
 
@@ -284,8 +293,7 @@ def download_video(body: DownloadVideoRequest):
     gs = _make_settings(db.get_all_settings())
     profile = _resolve_profile(body.profile, body)
     conversion_preset = _resolve_convert_preset(body)
-
-    out = body.output_dir or profile.download_directory or gs.temp_directory or os.getcwd()
+    out = _resolve_output_path(body, profile)
 
     tid = _create_task("video", body.url, body.model_dump(by_alias=True))
     _run_in_background(
@@ -299,8 +307,7 @@ def download_playlist(body: DownloadPlaylistRequest):
     gs = _make_settings(db.get_all_settings())
     profile = _resolve_profile(body.profile, body)
     conversion_preset = _resolve_convert_preset(body)
-
-    out = body.output_dir or profile.download_directory or gs.temp_directory or os.getcwd()
+    out = _resolve_output_path(body, profile)
 
     tid = _create_task("playlist", body.url, body.model_dump(by_alias=True))
     _run_in_background(
