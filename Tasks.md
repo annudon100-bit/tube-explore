@@ -33,9 +33,9 @@ At minimum, add:
 
 ### 11. Enforce quality mode rules ✅
 
-### 12. Add enums for status and type fields
+### 12. Add enums for status and type fields ✅
 
-### 13. Clarify outbox lifecycle ← current
+### 13. Clarify outbox lifecycle ✅
 
 ### 14. Fix delete profile response schema ✅
 
@@ -224,7 +224,7 @@ At minimum:
 5. Add cancel/retry/delete task APIs. ✅
 6. Resolve `PUT` vs `PATCH`. ✅
 7. Resolve profile ID/name and format/downloadFormat inconsistencies. ✅
-8. Clarify outbox lifecycle. ← next
-9. Add validation constraints and enums. (quality-mode validation ✅, enums ← next)
-10. Add health/readiness and file/history APIs.
+8. Clarify outbox lifecycle. ✅
+9. Add validation constraints and enums. ✅
+10. Add health/readiness and file/history APIs. ← next
 

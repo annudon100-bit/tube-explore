@@ -20,6 +20,17 @@ def test_health():
     data = resp.json()
     assert data["status"] == "ok"
     assert "hasFfmpeg" in data
+    assert "hasYtdlp" in data
+    assert "downloadDirectoryWritable" in data
+    assert "tempDirectoryWritable" in data
+    assert "workerRunning" in data
+
+
+def test_ready():
+    resp = client.get("/api/ready")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
 
 
 # ── Profiles ──────────────────────────────────────────────────

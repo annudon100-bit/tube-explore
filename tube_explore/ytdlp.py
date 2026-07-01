@@ -15,6 +15,29 @@ from tube_explore.models import ConversionPreset, Profile, QualityMode, Settings
 YTDLP_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HAS_FFMPEG = shutil.which("ffmpeg") is not None
+HAS_YTDLP = shutil.which("yt-dlp") is not None or os.path.isfile(os.path.join(SCRIPT_DIR, "yt-dlp"))
+
+
+def get_ffmpeg_version() -> str | None:
+    if not HAS_FFMPEG:
+        return None
+    try:
+        result = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True, timeout=5)
+        line = result.stdout.split("\n")[0]
+        # "ffmpeg version 7.1.1" or similar
+        parts = line.split("version")
+        return parts[1].strip().split()[0] if len(parts) > 1 else None
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+
+
+def get_ytdlp_version() -> str | None:
+    try:
+        binary = ensure_binary()
+        result = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=10)
+        return result.stdout.strip() or None
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
 
 
 def ensure_binary() -> str:

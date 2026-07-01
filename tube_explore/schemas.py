@@ -310,6 +310,12 @@ class HealthResponse(BaseModel):
 
     status: str = "ok"
     has_ffmpeg: bool = Field(False, validation_alias="hasFfmpeg")
+    ffmpeg_version: str | None = Field(None, validation_alias="ffmpegVersion")
+    has_ytdlp: bool = Field(False, validation_alias="hasYtdlp")
+    ytdlp_version: str | None = Field(None, validation_alias="ytdlpVersion")
+    download_directory_writable: bool = Field(True, validation_alias="downloadDirectoryWritable")
+    temp_directory_writable: bool = Field(True, validation_alias="tempDirectoryWritable")
+    worker_running: bool = Field(False, validation_alias="workerRunning")
 
 
 # ── Outbox ────────────────────────────────────────────────────

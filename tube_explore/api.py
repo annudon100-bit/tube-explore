@@ -550,9 +550,32 @@ def update_settings(body: SettingsUpdateRequest):
 # ── Health ───────────────────────────────────────────────────
 
 
-@app.get("/api/health", response_model=HealthResponse, summary="Health check", description="Returns service health status and whether ffmpeg is available for audio/video merging.", tags=["Health"])
+@app.get("/api/health", response_model=HealthResponse, summary="Health check", description="Returns service health status, ffmpeg/yt-dlp availability with versions, directory writability, and worker status.", tags=["Health"])
 def health():
-    return HealthResponse(status="ok", has_ffmpeg=ytdlp.HAS_FFMPEG)
+    settings = db.get_all_settings()
+    ffmpeg_ver = ytdlp.get_ffmpeg_version()
+    ytdlp_ver = ytdlp.get_ytdlp_version()
+    temp_dir = settings.get("temp_directory", "").strip() or tempfile.gettempdir()
+    worker_running = any(
+        t.name == "download-worker" for t in threading.enumerate()
+    )
+    # Check writability of config dir (where DB lives) and temp dir
+    config_dir = config.get_config_dir()
+    return HealthResponse(
+        status="ok",
+        has_ffmpeg=ytdlp.HAS_FFMPEG,
+        ffmpeg_version=ffmpeg_ver,
+        has_ytdlp=ytdlp.HAS_YTDLP,
+        ytdlp_version=ytdlp_ver,
+        download_directory_writable=os.access(config_dir, os.W_OK),
+        temp_directory_writable=os.access(temp_dir, os.W_OK),
+        worker_running=worker_running,
+    )
+
+
+@app.get("/api/ready", response_model=HealthResponse, summary="Readiness check", description="Returns 200 when the service is ready to accept requests (always ready in current implementation).", tags=["Health"])
+def ready():
+    return health()
 
 
 # ── Outbox ────────────────────────────────────────────────────
