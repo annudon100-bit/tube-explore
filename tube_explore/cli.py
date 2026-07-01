@@ -194,7 +194,7 @@ def cmd_settings_set(args):
 def main():
     db.init_db()
 
-    parser = argparse.ArgumentParser(description="Tube Explore - YouTube downloader & searcher")
+    parser = argparse.ArgumentParser(description="Tube Explore - Media downloader & searcher")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_info = sub.add_parser("info", help="Show video metadata")
@@ -202,7 +202,7 @@ def main():
     p_info.add_argument("--json", action="store_true")
     p_info.set_defaults(func=cmd_info)
 
-    p_search = sub.add_parser("search", help="Search YouTube videos")
+    p_search = sub.add_parser("search", help="Search videos")
     p_search.add_argument("query")
     p_search.add_argument("--limit", "-l", type=int, default=10)
     p_search.set_defaults(func=cmd_search)

@@ -32,7 +32,61 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="Tube Explore API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="Tube Explore API",
+    description="Media download and search backend. Download videos, fetch metadata, browse playlists, and manage download profiles via a clean REST API.",
+    summary="Media downloader REST API",
+    version="1.0.0",
+    terms_of_service="https://github.com/anomalyco/tube-explore",
+    contact={
+        "name": "Tube Explore",
+        "url": "https://github.com/anomalyco/tube-explore",
+    },
+    license_info={
+        "name": "MIT",
+        "url": "https://opensource.org/licenses/MIT",
+    },
+    servers=[
+        {"url": "http://localhost:8000", "description": "Local development"},
+    ],
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url="/docs",
+    openapi_tags=[
+        {
+            "name": "Search",
+            "description": "Search for media content by query string.",
+        },
+        {
+            "name": "Metadata",
+            "description": "Retrieve detailed metadata for a specific media URL.",
+        },
+        {
+            "name": "Playlists",
+            "description": "Browse and list entries in a playlist.",
+        },
+        {
+            "name": "Downloads",
+            "description": "Start background download tasks for videos or playlists.",
+        },
+        {
+            "name": "Tasks",
+            "description": "Monitor and list background download task status.",
+        },
+        {
+            "name": "Profiles",
+            "description": "CRUD management of download profiles (quality, format, directory settings).",
+        },
+        {
+            "name": "Settings",
+            "description": "Global download settings (rate limit, temp directory, retries, timeout).",
+        },
+        {
+            "name": "Health",
+            "description": "Service health check.",
+        },
+    ],
+)
 
 
 # ── Task store ───────────────────────────────────────────────
@@ -99,8 +153,8 @@ def _resolve_profile(profile_name: str | None, body_overrides) -> Profile:
 # ── Search / Metadata / Playlist ─────────────────────────────
 
 
-@app.get("/api/search", response_model=SearchResponse)
-def search(q: str = Query(...), limit: int = Query(10, ge=1, le=50)):
+@app.get("/api/search", response_model=SearchResponse, summary="Search media", description="Search for media content by query string. Returns a ranked list of matching results with ID, title, duration, and channel info.", tags=["Search"])
+def search(q: str = Query(..., description="Search query string"), limit: int = Query(10, ge=1, le=50, description="Maximum number of results (1–50)")):
     try:
         results = ytdlp.search_videos(q, limit)
         return SearchResponse(query=q, count=len(results), results=[SearchResult(**r) for r in results])
@@ -108,16 +162,16 @@ def search(q: str = Query(...), limit: int = Query(10, ge=1, le=50)):
         raise HTTPException(500, str(e)) from e
 
 
-@app.get("/api/metadata", response_model=MetadataResponse)
-def metadata(url: str = Query(...)):
+@app.get("/api/metadata", response_model=MetadataResponse, summary="Get media metadata", description="Fetch full metadata for a given media URL, including available formats, duration, resolution, and thumbnails.", tags=["Metadata"])
+def metadata(url: str = Query(..., description="Media URL to inspect")):
     try:
         return ytdlp.get_metadata(url)
     except RuntimeError as e:
         raise HTTPException(500, str(e)) from e
 
 
-@app.get("/api/playlist", response_model=PlaylistResponse)
-def playlist(url: str = Query(...)):
+@app.get("/api/playlist", response_model=PlaylistResponse, summary="Get playlist info", description="Fetch all entries in a playlist URL, including per-video duration, position, title, and thumbnails.", tags=["Playlists"])
+def playlist(url: str = Query(..., description="Playlist URL")):
     try:
         entries = ytdlp.get_playlist_info(url)
         total_dur = sum(e["duration"] or 0 for e in entries)
@@ -138,7 +192,7 @@ def _make_settings(raw: dict[str, str]) -> SettingsDict:
     )
 
 
-@app.post("/api/download/video", status_code=202)
+@app.post("/api/download/video", status_code=202, summary="Download video", description="Start a background task to download a single video. Accepts profile name or per-request overrides for quality, format, directory, and audio-only mode. Returns a task ID for status polling.", tags=["Downloads"])
 def download_video(body: DownloadVideoRequest):
     gs = _make_settings(db.get_all_settings())
     profile = _resolve_profile(body.profile, body)
@@ -152,7 +206,7 @@ def download_video(body: DownloadVideoRequest):
     return {"taskId": tid, "status": "pending"}
 
 
-@app.post("/api/download/playlist", status_code=202)
+@app.post("/api/download/playlist", status_code=202, summary="Download playlist", description="Start a background task to download all videos in a playlist. Supports optional index range filtering and audio-only mode. Returns a task ID for status polling.", tags=["Downloads"])
 def download_playlist(body: DownloadPlaylistRequest):
     gs = _make_settings(db.get_all_settings())
     profile = _resolve_profile(body.profile, body)
@@ -176,7 +230,7 @@ def download_playlist(body: DownloadPlaylistRequest):
 # ── Tasks ────────────────────────────────────────────────────
 
 
-@app.get("/api/tasks/{task_id}", response_model=TaskResponse)
+@app.get("/api/tasks/{task_id}", response_model=TaskResponse, summary="Get task status", description="Poll the status of a background download task by its ID. Returns the current status (pending/running/completed/failed), type, URL, timestamps, and error if any.", tags=["Tasks"])
 def get_task(task_id: str):
     with _lock:
         task = _tasks.get(task_id)
@@ -185,7 +239,7 @@ def get_task(task_id: str):
     return task
 
 
-@app.get("/api/tasks", response_model=list[TaskResponse])
+@app.get("/api/tasks", response_model=list[TaskResponse], summary="List tasks", description="List all background download tasks. Sorted by creation time (newest first). Includes status, type, URL, and error info for each task.", tags=["Tasks"])
 def list_tasks():
     with _lock:
         return list(_tasks.values())
@@ -194,12 +248,12 @@ def list_tasks():
 # ── Profiles ─────────────────────────────────────────────────
 
 
-@app.get("/api/profiles", response_model=list[ProfileResponse])
+@app.get("/api/profiles", response_model=list[ProfileResponse], summary="List profiles", description="List all saved download profiles. Each profile bundles quality mode, format string, download directory, and audio-only flag.", tags=["Profiles"])
 def list_profiles():
     return db.list_profiles()
 
 
-@app.post("/api/profiles", response_model=ProfileResponse, status_code=201)
+@app.post("/api/profiles", response_model=ProfileResponse, status_code=201, summary="Create profile", description="Create a new download profile. Name must be unique. Quality mode can be `best`, `least`, `at_most`, or `at_least` (latter two require a pixel height value).", tags=["Profiles"])
 def create_profile(body: ProfileCreateRequest):
     existing = db.get_profile_by_name(body.name)
     if existing:
@@ -208,7 +262,7 @@ def create_profile(body: ProfileCreateRequest):
     return p
 
 
-@app.get("/api/profiles/{profile_id}", response_model=ProfileResponse)
+@app.get("/api/profiles/{profile_id}", response_model=ProfileResponse, summary="Get profile", description="Retrieve a single download profile by its ID.", tags=["Profiles"])
 def get_profile(profile_id: int):
     p = db.get_profile(profile_id)
     if not p:
@@ -216,7 +270,7 @@ def get_profile(profile_id: int):
     return p
 
 
-@app.put("/api/profiles/{profile_id}", response_model=ProfileResponse)
+@app.put("/api/profiles/{profile_id}", response_model=ProfileResponse, summary="Update profile", description="Update an existing download profile. Only provided fields are changed; omitted fields keep their current values.", tags=["Profiles"])
 def update_profile(profile_id: int, body: ProfileUpdateRequest):
     existing = db.get_profile(profile_id)
     if not existing:
@@ -228,7 +282,7 @@ def update_profile(profile_id: int, body: ProfileUpdateRequest):
     return p
 
 
-@app.delete("/api/profiles/{profile_id}")
+@app.delete("/api/profiles/{profile_id}", summary="Delete profile", description="Delete a download profile by its ID. Returns `{\"ok\": true}` on success.", tags=["Profiles"])
 def delete_profile(profile_id: int):
     existing = db.get_profile(profile_id)
     if not existing:
@@ -240,13 +294,13 @@ def delete_profile(profile_id: int):
 # ── Global settings ──────────────────────────────────────────
 
 
-@app.get("/api/settings", response_model=SettingsResponse)
+@app.get("/api/settings", response_model=SettingsResponse, summary="Get settings", description="Retrieve all global download settings: rate limit, temp directory, retry count, and socket timeout.", tags=["Settings"])
 def get_settings():
     raw = db.get_all_settings()
     return SettingsResponse(**raw)
 
 
-@app.put("/api/settings", response_model=SettingsResponse)
+@app.put("/api/settings", response_model=SettingsResponse, summary="Update settings", description="Update global download settings. Only provided fields are changed; omitted fields keep their current values.", tags=["Settings"])
 def update_settings(body: SettingsUpdateRequest):
     data = {k: str(v) for k, v in body.model_dump(exclude_none=True).items()}
     if data:
@@ -257,6 +311,6 @@ def update_settings(body: SettingsUpdateRequest):
 # ── Health ───────────────────────────────────────────────────
 
 
-@app.get("/api/health", response_model=HealthResponse)
+@app.get("/api/health", response_model=HealthResponse, summary="Health check", description="Returns service health status and whether ffmpeg is available for audio/video merging.", tags=["Health"])
 def health():
     return HealthResponse(status="ok", has_ffmpeg=ytdlp.HAS_FFMPEG)

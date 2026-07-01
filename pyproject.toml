@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tube-explore"
 version = "1.0.0"
-description = "YouTube downloader & search back-end with FastAPI, SQLite, and profiles"
+description = "Media downloader & search back-end with FastAPI, SQLite, and profiles"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",

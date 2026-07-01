@@ -23,7 +23,7 @@ _CAMEL_CONFIG = ConfigDict(
 class SearchResult(BaseModel):
     model_config = _CAMEL_CONFIG
 
-    id: str = Field(..., description="YouTube video ID")
+    id: str = Field(..., description="Media video ID")
     title: str | None = None
     url: str = Field(..., description="Full watch URL")
     duration: int | None = None
@@ -100,7 +100,7 @@ class PlaylistResponse(BaseModel):
 class DownloadVideoRequest(BaseModel):
     model_config = _CAMEL_CONFIG
 
-    url: str = Field(..., description="YouTube video URL")
+    url: str = Field(..., description="Media video URL")
     output_dir: str | None = Field(None, description="Output directory")
     profile: str | None = Field(None, description="Name of an existing profile to use")
     format_str: str | None = Field(None, description="yt-dlp format string override", alias="format")
@@ -118,7 +118,7 @@ class DownloadVideoRequest(BaseModel):
 class DownloadPlaylistRequest(BaseModel):
     model_config = _CAMEL_CONFIG
 
-    url: str = Field(..., description="YouTube playlist URL")
+    url: str = Field(..., description="Media playlist URL")
     output_dir: str | None = Field(None, description="Output directory")
     profile: str | None = Field(None, description="Name of an existing profile to use")
     range: str | None = Field(None, description="Playlist item range, e.g. 1-5")
