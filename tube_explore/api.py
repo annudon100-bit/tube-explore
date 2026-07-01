@@ -8,6 +8,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -32,6 +33,7 @@ from tube_explore.schemas import (
     DownloadPlaylistRequest,
     DownloadTaskCreatedResponse,
     DownloadVideoRequest,
+    ErrorResponse,
     HealthResponse,
     MetadataResponse,
     OkResponse,
@@ -49,6 +51,10 @@ from tube_explore.schemas import (
     TaskResponse,
     TaskResultResponse,
 )
+
+_404: dict[int | str, dict[str, Any]] = {404: {"model": ErrorResponse, "description": "Resource not found"}}
+_409: dict[int | str, dict[str, Any]] = {409: {"model": ErrorResponse, "description": "Conflict"}}
+_404_409: dict[int | str, dict[str, Any]] = {**_404, **_409}
 
 
 @asynccontextmanager
@@ -322,7 +328,7 @@ def _make_settings(raw: dict[str, str]) -> SettingsDict:
     )
 
 
-@app.post("/api/download/video", response_model=DownloadTaskCreatedResponse, status_code=202, summary="Download video", description="Start a background task to download a single video. Accepts profile name or per-request overrides for quality, format, directory, audio-only mode, and a conversion preset. Returns a task ID for status polling.", tags=["Downloads"])
+@app.post("/api/download/video", response_model=DownloadTaskCreatedResponse, status_code=202, responses=_404, summary="Download video", description="Start a background task to download a single video. Accepts profile name or per-request overrides for quality, format, directory, audio-only mode, and a conversion preset. Returns a task ID for status polling.", tags=["Downloads"])
 def download_video(body: DownloadVideoRequest):
     gs = _make_settings(db.get_all_settings())
     profile = _resolve_profile(body.profile, body)
@@ -336,7 +342,7 @@ def download_video(body: DownloadVideoRequest):
     return DownloadTaskCreatedResponse(task_id=tid, status="pending", status_url=f"/api/tasks/{tid}", stream_url=f"/api/tasks/{tid}/stream")
 
 
-@app.post("/api/download/playlist", response_model=DownloadTaskCreatedResponse, status_code=202, summary="Download playlist", description="Start a background task to download all videos in a playlist. Supports optional index range filtering, audio-only mode, and a conversion preset. Returns a task ID for status polling.", tags=["Downloads"])
+@app.post("/api/download/playlist", response_model=DownloadTaskCreatedResponse, status_code=202, responses=_404, summary="Download playlist", description="Start a background task to download all videos in a playlist. Supports optional index range filtering, audio-only mode, and a conversion preset. Returns a task ID for status polling.", tags=["Downloads"])
 def download_playlist(body: DownloadPlaylistRequest):
     gs = _make_settings(db.get_all_settings())
     profile = _resolve_profile(body.profile, body)
@@ -362,7 +368,7 @@ def download_playlist(body: DownloadPlaylistRequest):
 # ── Tasks ────────────────────────────────────────────────────
 
 
-@app.get("/api/tasks/{task_id}", response_model=TaskResponse, summary="Get task status", description="Poll the status of a background download task by its ID. Returns the current status (pending/running/completed/failed), type, URL, timestamps, and error if any.", tags=["Tasks"])
+@app.get("/api/tasks/{task_id}", response_model=TaskResponse, responses=_404, summary="Get task status", description="Poll the status of a background download task by its ID. Returns the current status (pending/running/completed/failed), type, URL, timestamps, and error if any.", tags=["Tasks"])
 def get_task(task_id: str):
     with _lock:
         task = _tasks.get(task_id)
@@ -377,7 +383,7 @@ def list_tasks():
         return list(_tasks.values())
 
 
-@app.get("/api/tasks/{task_id}/stream", summary="Task status SSE stream", description="Subscribe to real-time status updates for a background task. Sends the current state immediately, then pushes updates until the task completes or fails. Sends keepalive every 30s.", tags=["Tasks"])
+@app.get("/api/tasks/{task_id}/stream", responses=_404, summary="Task status SSE stream", description="Subscribe to real-time status updates for a background task. Sends the current state immediately, then pushes updates until the task completes or fails. Sends keepalive every 30s.", tags=["Tasks"])
 async def task_stream(task_id: str):
     with _lock:
         task = _tasks.get(task_id)
@@ -403,7 +409,7 @@ async def task_stream(task_id: str):
     return StreamingResponse(event_gen(), media_type="text/event-stream")
 
 
-@app.get("/api/tasks/{task_id}/result", response_model=TaskResultResponse, summary="Get task result", description="Retrieve the files produced by a completed download task. Returns file names, sizes, and absolute paths.", tags=["Tasks"])
+@app.get("/api/tasks/{task_id}/result", response_model=TaskResultResponse, responses=_404, summary="Get task result", description="Retrieve the files produced by a completed download task. Returns file names, sizes, and absolute paths.", tags=["Tasks"])
 def get_task_result(task_id: str):
     with _lock:
         task = _tasks.get(task_id)
@@ -413,7 +419,7 @@ def get_task_result(task_id: str):
     return TaskResultResponse(task_id=task.id, status=task.status, files=files)
 
 
-@app.post("/api/tasks/{task_id}/cancel", summary="Cancel task", description="Cancel a pending or running task. Sets status to `cancelled` so the result is discarded.", tags=["Tasks"])
+@app.post("/api/tasks/{task_id}/cancel", responses=_404_409, summary="Cancel task", description="Cancel a pending or running task. Sets status to `cancelled` so the result is discarded.", tags=["Tasks"])
 def cancel_task(task_id: str):
     with _lock:
         task = _tasks.get(task_id)
@@ -453,7 +459,7 @@ def _re_run_task(task: TaskInfo) -> str:
     return tid
 
 
-@app.post("/api/tasks/{task_id}/retry", response_model=DownloadTaskCreatedResponse, summary="Retry task", description="Retry a failed download task. Creates a new task with the same parameters and returns the new task ID and status URLs.", tags=["Tasks"])
+@app.post("/api/tasks/{task_id}/retry", response_model=DownloadTaskCreatedResponse, responses=_404_409, summary="Retry task", description="Retry a failed download task. Creates a new task with the same parameters and returns the new task ID and status URLs.", tags=["Tasks"])
 def retry_task(task_id: str):
     with _lock:
         task = _tasks.get(task_id)
@@ -465,7 +471,7 @@ def retry_task(task_id: str):
     return DownloadTaskCreatedResponse(task_id=tid, status="pending", status_url=f"/api/tasks/{tid}", stream_url=f"/api/tasks/{tid}/stream")
 
 
-@app.delete("/api/tasks/{task_id}", response_model=OkResponse, summary="Delete task", description="Remove a completed, failed, or cancelled task from memory.", tags=["Tasks"])
+@app.delete("/api/tasks/{task_id}", response_model=OkResponse, responses=_404_409, summary="Delete task", description="Remove a completed, failed, or cancelled task from memory.", tags=["Tasks"])
 def delete_task(task_id: str):
     with _lock:
         task = _tasks.get(task_id)
@@ -485,7 +491,7 @@ def list_profiles():
     return db.list_profiles()
 
 
-@app.post("/api/profiles", response_model=ProfileResponse, status_code=201, summary="Create profile", description="Create a new download profile. Name must be unique. Quality mode can be `best`, `least`, `at_most`, or `at_least` (latter two require a pixel height value).", tags=["Profiles"])
+@app.post("/api/profiles", response_model=ProfileResponse, status_code=201, responses=_409, summary="Create profile", description="Create a new download profile. Name must be unique. Quality mode can be `best`, `least`, `at_most`, or `at_least` (latter two require a pixel height value).", tags=["Profiles"])
 def create_profile(body: ProfileCreateRequest):
     existing = db.get_profile_by_name(body.name)
     if existing:
@@ -494,7 +500,7 @@ def create_profile(body: ProfileCreateRequest):
     return p
 
 
-@app.get("/api/profiles/{profile_id}", response_model=ProfileResponse, summary="Get profile", description="Retrieve a single download profile by its ID.", tags=["Profiles"])
+@app.get("/api/profiles/{profile_id}", response_model=ProfileResponse, responses=_404, summary="Get profile", description="Retrieve a single download profile by its ID.", tags=["Profiles"])
 def get_profile(profile_id: int):
     p = db.get_profile(profile_id)
     if not p:
@@ -502,7 +508,7 @@ def get_profile(profile_id: int):
     return p
 
 
-@app.put("/api/profiles/{profile_id}", response_model=ProfileResponse, summary="Update profile", description="Update an existing download profile. Only provided fields are changed; omitted fields keep their current values.", tags=["Profiles"])
+@app.put("/api/profiles/{profile_id}", response_model=ProfileResponse, responses=_404, summary="Update profile", description="Update an existing download profile. Only provided fields are changed; omitted fields keep their current values.", tags=["Profiles"])
 def update_profile(profile_id: int, body: ProfileUpdateRequest):
     existing = db.get_profile(profile_id)
     if not existing:
@@ -514,7 +520,7 @@ def update_profile(profile_id: int, body: ProfileUpdateRequest):
     return p
 
 
-@app.delete("/api/profiles/{profile_id}", summary="Delete profile", description="Delete a download profile by its ID. Returns `{\"ok\": true}` on success.", tags=["Profiles"])
+@app.delete("/api/profiles/{profile_id}", responses=_404, summary="Delete profile", description="Delete a download profile by its ID. Returns `{\"ok\": true}` on success.", tags=["Profiles"])
 def delete_profile(profile_id: int):
     existing = db.get_profile(profile_id)
     if not existing:
@@ -583,7 +589,7 @@ def list_outbox():
     return _list_outbox()
 
 
-@app.delete("/api/outbox/{file_id}", response_model=OkResponse, summary="Delete outbox file", description="Remove a file from the outbox by its file ID. Also deletes the file from disk.", tags=["Outbox"])
+@app.delete("/api/outbox/{file_id}", response_model=OkResponse, responses=_404, summary="Delete outbox file", description="Remove a file from the outbox by its file ID. Also deletes the file from disk.", tags=["Outbox"])
 def delete_outbox_file(file_id: str):
     record = db.get_outbox_file(file_id)
     if not record:
@@ -595,7 +601,7 @@ def delete_outbox_file(file_id: str):
     return OkResponse()
 
 
-@app.post("/api/outbox/{file_id}/process", response_model=OkResponse, summary="Retry conversion on outbox file", description="Attempt to convert an outbox file again using the specified conversion preset. Requires ffmpeg. On success the converted file replaces the original in the outbox.", tags=["Outbox"])
+@app.post("/api/outbox/{file_id}/process", response_model=OkResponse, responses=_404, summary="Retry conversion on outbox file", description="Attempt to convert an outbox file again using the specified conversion preset. Requires ffmpeg. On success the converted file replaces the original in the outbox.", tags=["Outbox"])
 def process_outbox_file(file_id: str, body: OutboxProcessRequest):
     record = db.get_outbox_file(file_id)
     if not record:
@@ -663,7 +669,7 @@ def list_convert_presets():
     return db.list_presets()
 
 
-@app.post("/api/convert-presets", response_model=ConversionPresetResponse, status_code=201, summary="Create conversion preset", description="Create a custom output format preset with container, codecs, bitrate, resolution, and other encoding parameters.", tags=["Conversion Presets"])
+@app.post("/api/convert-presets", response_model=ConversionPresetResponse, status_code=201, responses=_409, summary="Create conversion preset", description="Create a custom output format preset with container, codecs, bitrate, resolution, and other encoding parameters.", tags=["Conversion Presets"])
 def create_convert_preset(body: ConversionPresetCreateRequest):
     existing = db.get_preset_by_name(body.name)
     if existing:
@@ -672,7 +678,7 @@ def create_convert_preset(body: ConversionPresetCreateRequest):
     return p
 
 
-@app.get("/api/convert-presets/{preset_name}", response_model=ConversionPresetResponse, summary="Get conversion preset", description="Retrieve a single conversion preset by name.", tags=["Conversion Presets"])
+@app.get("/api/convert-presets/{preset_name}", response_model=ConversionPresetResponse, responses=_404, summary="Get conversion preset", description="Retrieve a single conversion preset by name.", tags=["Conversion Presets"])
 def get_convert_preset(preset_name: str):
     p = db.get_preset_by_name(preset_name)
     if not p:
@@ -680,7 +686,7 @@ def get_convert_preset(preset_name: str):
     return p
 
 
-@app.put("/api/convert-presets/{preset_name}", response_model=ConversionPresetResponse, summary="Update conversion preset", description="Update an existing conversion preset. Only provided fields are changed.", tags=["Conversion Presets"])
+@app.put("/api/convert-presets/{preset_name}", response_model=ConversionPresetResponse, responses=_404, summary="Update conversion preset", description="Update an existing conversion preset. Only provided fields are changed.", tags=["Conversion Presets"])
 def update_convert_preset(preset_name: str, body: ConversionPresetUpdateRequest):
     existing = db.get_preset_by_name(preset_name)
     if not existing:
@@ -692,7 +698,7 @@ def update_convert_preset(preset_name: str, body: ConversionPresetUpdateRequest)
     return p
 
 
-@app.delete("/api/convert-presets/{preset_name}", response_model=OkResponse, summary="Delete conversion preset", description="Remove a conversion preset by name.", tags=["Conversion Presets"])
+@app.delete("/api/convert-presets/{preset_name}", response_model=OkResponse, responses=_404, summary="Delete conversion preset", description="Remove a conversion preset by name.", tags=["Conversion Presets"])
 def delete_convert_preset(preset_name: str):
     existing = db.get_preset_by_name(preset_name)
     if not existing:

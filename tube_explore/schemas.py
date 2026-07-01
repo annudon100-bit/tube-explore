@@ -310,6 +310,12 @@ class OutboxProcessRequest(BaseModel):
 # ── Generic ───────────────────────────────────────────────────
 
 
+class ErrorResponse(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    detail: str = Field(..., description="Human-readable error message")
+
+
 class OkResponse(BaseModel):
     model_config = _CAMEL_CONFIG
 
