@@ -31,7 +31,7 @@ At minimum, add:
 
 ### 10. Resolve `format` vs `downloadFormat` ✅
 
-### 11. Enforce quality mode rules
+### 11. Enforce quality mode rules ✅
 
 ### 12. Add enums for status and type fields
 
@@ -225,6 +225,6 @@ At minimum:
 6. Resolve `PUT` vs `PATCH`. ✅
 7. Resolve profile ID/name and format/downloadFormat inconsistencies. ✅
 8. Clarify outbox lifecycle. ← next
-9. Add validation constraints and enums.
+9. Add validation constraints and enums. (quality-mode validation ✅, enums ← next)
 10. Add health/readiness and file/history APIs.
 

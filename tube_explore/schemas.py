@@ -1,6 +1,7 @@
 from datetime import datetime
+from typing import Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from tube_explore.models import QualityMode
 
@@ -15,6 +16,11 @@ _CAMEL_CONFIG = ConfigDict(
     populate_by_name=True,
     from_attributes=True,
 )
+
+
+def _validate_quality_mode(mode: QualityMode | None, value: int | None) -> None:
+    if mode in (QualityMode.at_most, QualityMode.at_least) and value is None:
+        raise ValueError(f"Quality value is required when mode is '{mode}'")
 
 
 # ── Search ────────────────────────────────────────────────────
@@ -115,6 +121,12 @@ class DownloadVideoRequest(BaseModel):
     subtitles: bool | None = None
     subtitle_langs: str | None = None
 
+    @model_validator(mode="after")
+    def _check_quality_values(self) -> Self:
+        if self.download_quality_mode is not None:
+            _validate_quality_mode(self.download_quality_mode, self.download_quality_value)
+        return self
+
 
 class DownloadPlaylistRequest(BaseModel):
     model_config = _CAMEL_CONFIG
@@ -134,6 +146,12 @@ class DownloadPlaylistRequest(BaseModel):
     embed_thumbnail: bool | None = None
     subtitles: bool | None = None
     subtitle_langs: str | None = None
+
+    @model_validator(mode="after")
+    def _check_quality_values(self) -> Self:
+        if self.download_quality_mode is not None:
+            _validate_quality_mode(self.download_quality_mode, self.download_quality_value)
+        return self
 
 
 class DownloadTaskCreatedResponse(BaseModel):
@@ -203,6 +221,12 @@ class ProfileCreateRequest(BaseModel):
     subtitles: bool = False
     subtitle_langs: str | None = None
 
+    @model_validator(mode="after")
+    def _check_quality_values(self) -> Self:
+        _validate_quality_mode(self.download_quality_mode, self.download_quality_value)
+        _validate_quality_mode(self.convert_quality_mode, self.convert_quality_value)
+        return self
+
 
 class ProfileUpdateRequest(BaseModel):
     model_config = _CAMEL_CONFIG
@@ -223,6 +247,14 @@ class ProfileUpdateRequest(BaseModel):
     embed_thumbnail: bool | None = None
     subtitles: bool | None = None
     subtitle_langs: str | None = None
+
+    @model_validator(mode="after")
+    def _check_quality_values(self) -> Self:
+        if self.download_quality_mode is not None:
+            _validate_quality_mode(self.download_quality_mode, self.download_quality_value)
+        if self.convert_quality_mode is not None:
+            _validate_quality_mode(self.convert_quality_mode, self.convert_quality_value)
+        return self
 
 
 class ProfileResponse(BaseModel):
