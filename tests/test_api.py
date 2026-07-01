@@ -1,5 +1,8 @@
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
+from tube_explore import config
 from tube_explore.api import app
 
 client = TestClient(app)
@@ -174,4 +177,48 @@ def test_list_tasks_empty():
 
 def test_get_nonexistent_task():
     resp = client.get("/api/tasks/nonexistent")
+    assert resp.status_code == 404
+
+
+# ── Outbox ────────────────────────────────────────────────────
+
+
+def test_list_outbox_empty():
+    resp = client.get("/api/outbox")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_list_outbox_with_files(tmp_path):
+    outbox = Path(config.get_outbox_dir())
+    (outbox / "video.mp4").write_text("dummy")
+    (outbox / "audio.webm").write_text("dummy")
+    try:
+        resp = client.get("/api/outbox")
+        assert resp.status_code == 200
+        data = resp.json()
+        names = {e["name"] for e in data}
+        assert names == {"video.mp4", "audio.webm"}
+        for e in data:
+            assert "size" in e
+            assert "modifiedAt" in e
+    finally:
+        (outbox / "video.mp4").unlink(missing_ok=True)
+        (outbox / "audio.webm").unlink(missing_ok=True)
+
+
+def test_delete_outbox_file():
+    outbox = Path(config.get_outbox_dir())
+    (outbox / "delete_me.mp4").write_text("to be deleted")
+    try:
+        resp = client.delete("/api/outbox/delete_me.mp4")
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+        assert not (outbox / "delete_me.mp4").exists()
+    finally:
+        (outbox / "delete_me.mp4").unlink(missing_ok=True)
+
+
+def test_delete_nonexistent_outbox_file():
+    resp = client.delete("/api/outbox/nonexistent.mkv")
     assert resp.status_code == 404

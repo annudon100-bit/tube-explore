@@ -7,6 +7,7 @@ import urllib.request
 from datetime import datetime
 from typing import Any
 
+from tube_explore import config
 from tube_explore.models import Profile, QualityMode, SettingsDict
 
 YTDLP_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
@@ -165,9 +166,10 @@ def _download_with_profile(
     is_playlist: bool = False,
     video_range: str | None = None,
     audio_only: bool = False,
-) -> None:
+) -> dict[str, Any]:
     temp_dir = settings.temp_directory.strip()
     final_dir = output_dir
+    outbox_dir = config.get_outbox_dir()
 
     if temp_dir:
         os.makedirs(temp_dir, exist_ok=True)
@@ -189,8 +191,32 @@ def _download_with_profile(
 
     _run(args, capture=False)
 
+    result: dict[str, Any] = {}
+
     if temp_dir and final_dir != temp_dir:
         _move_downloads(dl_dir, final_dir)
+        dl_dir = final_dir
+
+    if not HAS_FFMPEG and not audio_only:
+        _route_to_outbox(dl_dir, outbox_dir)
+        result["outbox"] = outbox_dir
+
+    return result
+
+
+def _route_to_outbox(src: str, outbox_dir: str) -> None:
+    os.makedirs(outbox_dir, exist_ok=True)
+    for entry in os.listdir(src):
+        s = os.path.join(src, entry)
+        d = os.path.join(outbox_dir, entry)
+        try:
+            if os.path.isdir(s):
+                shutil.copytree(s, d, dirs_exist_ok=True)
+                shutil.rmtree(s)
+            else:
+                shutil.move(s, d)
+        except OSError:
+            pass
 
 
 def _move_downloads(src: str, dst: str) -> None:
@@ -296,14 +322,14 @@ def download_video(
     profile: Profile | None = None,
     settings: SettingsDict | None = None,
     audio_only: bool = False,
-) -> None:
+) -> dict[str, Any]:
     if profile is None:
         profile = Profile(id=0, name="_adhoc", created_at=datetime.now(), updated_at=datetime.now())
     if settings is None:
         settings = SettingsDict()
 
     out = _resolve_dir(profile.download_directory, output_dir, settings)
-    _download_with_profile(url, out, profile, settings, is_playlist=False, audio_only=audio_only)
+    return _download_with_profile(url, out, profile, settings, is_playlist=False, audio_only=audio_only)
 
 
 def download_playlist(
@@ -313,13 +339,13 @@ def download_playlist(
     settings: SettingsDict | None = None,
     video_range: str | None = None,
     audio_only: bool = False,
-) -> None:
+) -> dict[str, Any]:
     if profile is None:
         profile = Profile(id=0, name="_adhoc", created_at=datetime.now(), updated_at=datetime.now())
     if settings is None:
         settings = SettingsDict()
 
     out = _resolve_dir(profile.download_directory, output_dir, settings)
-    _download_with_profile(
+    return _download_with_profile(
         url, out, profile, settings, is_playlist=True, video_range=video_range, audio_only=audio_only
     )

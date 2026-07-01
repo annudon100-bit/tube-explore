@@ -3,16 +3,19 @@ import threading
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 
-from tube_explore import db, ytdlp
+from tube_explore import config, db, ytdlp
 from tube_explore.models import Profile, ProfileCreate, ProfileUpdate, SettingsDict, TaskInfo
 from tube_explore.schemas import (
     DownloadPlaylistRequest,
     DownloadVideoRequest,
     HealthResponse,
     MetadataResponse,
+    OkResponse,
+    OutboxEntry,
     PlaylistEntry,
     PlaylistResponse,
     ProfileCreateRequest,
@@ -85,6 +88,10 @@ app = FastAPI(
             "name": "Health",
             "description": "Service health check.",
         },
+        {
+            "name": "Outbox",
+            "description": "List and manage files in the outbox — completed downloads that failed post-processing (e.g. missing ffmpeg).",
+        },
     ],
 )
 
@@ -120,8 +127,12 @@ def _run_in_background(tid: str, fn, *args, **kwargs):
     def wrapper():
         _update_task(tid, status="running")
         try:
-            fn(*args, **kwargs)
-            _update_task(tid, status="completed")
+            result = fn(*args, **kwargs)
+            outbox = (result or {}).get("outbox")
+            if outbox:
+                _update_task(tid, status="completed", error=f"Files routed to outbox: {outbox}")
+            else:
+                _update_task(tid, status="completed")
         except Exception as e:
             _update_task(tid, status="failed", error=str(e))
 
@@ -314,3 +325,38 @@ def update_settings(body: SettingsUpdateRequest):
 @app.get("/api/health", response_model=HealthResponse, summary="Health check", description="Returns service health status and whether ffmpeg is available for audio/video merging.", tags=["Health"])
 def health():
     return HealthResponse(status="ok", has_ffmpeg=ytdlp.HAS_FFMPEG)
+
+
+# ── Outbox ────────────────────────────────────────────────────
+
+
+def _list_outbox() -> list[OutboxEntry]:
+    outbox_dir = Path(config.get_outbox_dir())
+    if not outbox_dir.is_dir():
+        return []
+    entries: list[OutboxEntry] = []
+    for p in sorted(outbox_dir.iterdir()):
+        if p.is_file():
+            stat = p.stat()
+            entries.append(
+                OutboxEntry(
+                    name=p.name,
+                    size=stat.st_size,
+                    modified_at=datetime.fromtimestamp(stat.st_mtime, tz=UTC),
+                )
+            )
+    return entries
+
+
+@app.get("/api/outbox", response_model=list[OutboxEntry], summary="List outbox files", description="List all files in the outbox directory — downloads that completed but failed post-processing (e.g. missing ffmpeg).", tags=["Outbox"])
+def list_outbox():
+    return _list_outbox()
+
+
+@app.delete("/api/outbox/{file_name}", response_model=OkResponse, summary="Delete outbox file", description="Remove a file from the outbox by name.", tags=["Outbox"])
+def delete_outbox_file(file_name: str):
+    file_path = Path(config.get_outbox_dir()) / file_name
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(404, f"File '{file_name}' not found in outbox")
+    file_path.unlink()
+    return OkResponse()

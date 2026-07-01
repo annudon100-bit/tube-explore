@@ -246,6 +246,17 @@ class HealthResponse(BaseModel):
     has_ffmpeg: bool = Field(False, validation_alias="hasFfmpeg")
 
 
+# ── Outbox ────────────────────────────────────────────────────
+
+
+class OutboxEntry(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    name: str = Field(..., description="File name")
+    size: int = Field(..., description="File size in bytes")
+    modified_at: datetime = Field(..., description="Last modified timestamp")
+
+
 # ── Generic ───────────────────────────────────────────────────
 
 
