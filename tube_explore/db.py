@@ -1,9 +1,19 @@
 import os
 import sqlite3
+from contextlib import suppress
 from datetime import UTC, datetime
 
 from tube_explore.config import get_config_dir, get_db_path
-from tube_explore.models import Profile, ProfileCreate, ProfileUpdate, QualityMode
+from tube_explore.models import (
+    SEED_PRESETS,
+    ConversionPreset,
+    ConversionPresetCreate,
+    ConversionPresetUpdate,
+    Profile,
+    ProfileCreate,
+    ProfileUpdate,
+    QualityMode,
+)
 
 
 def _connect() -> sqlite3.Connection:
@@ -27,6 +37,13 @@ def _row_to_profile(row: sqlite3.Row) -> Profile:
     return Profile(**d)
 
 
+def _row_to_preset(row: sqlite3.Row) -> ConversionPreset:
+    d = dict(row)
+    d["created_at"] = datetime.fromisoformat(d["created_at"])
+    d["updated_at"] = datetime.fromisoformat(d["updated_at"])
+    return ConversionPreset(**d)
+
+
 def init_db() -> None:
     with _connect() as conn:
         conn.executescript("""
@@ -41,6 +58,7 @@ def init_db() -> None:
                                         CHECK(download_quality_mode IN ('best','least','at_most','at_least')),
                 download_quality_value  INTEGER DEFAULT NULL,
 
+                convert_preset          TEXT DEFAULT NULL,
                 convert_format          TEXT DEFAULT NULL,
                 convert_quality_mode    TEXT DEFAULT 'best'
                                         CHECK(convert_quality_mode IN ('best','least','at_most','at_least')),
@@ -61,13 +79,82 @@ def init_db() -> None:
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS conversion_presets (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                name              TEXT NOT NULL UNIQUE,
+                label             TEXT NOT NULL DEFAULT '',
+                container         TEXT NOT NULL,
+                video_codec       TEXT DEFAULT NULL,
+                video_bitrate     TEXT DEFAULT NULL,
+                video_fps         REAL DEFAULT NULL,
+                video_preset      TEXT DEFAULT NULL,
+                video_pixfmt      TEXT DEFAULT NULL,
+                audio_codec       TEXT DEFAULT NULL,
+                audio_bitrate     TEXT DEFAULT NULL,
+                audio_samplerate  INTEGER DEFAULT NULL,
+                audio_channels    INTEGER DEFAULT NULL,
+                max_width         INTEGER DEFAULT NULL,
+                max_height        INTEGER DEFAULT NULL,
+                output_ext        TEXT NOT NULL,
+                created_at        TEXT NOT NULL,
+                updated_at        TEXT NOT NULL
+            );
         """)
+
+        # Add convert_preset column if missing (migration for existing DBs)
+        with suppress(sqlite3.OperationalError):
+            conn.execute("ALTER TABLE profiles ADD COLUMN convert_preset TEXT DEFAULT NULL")
 
         for key in ("rate_limit", "temp_directory", "retry_count", "socket_timeout"):
             conn.execute(
                 "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
                 (key, {"rate_limit": "", "temp_directory": "", "retry_count": "3", "socket_timeout": "30"}[key]),
             )
+
+        _seed_presets(conn)
+
+
+def _seed_presets(conn: sqlite3.Connection) -> None:
+    now = datetime.now(UTC).isoformat()
+    for preset in SEED_PRESETS:
+        existing = conn.execute("SELECT id FROM conversion_presets WHERE name = ?", (preset["name"],)).fetchone()
+        if existing:
+            continue
+        conn.execute(
+            """
+            INSERT INTO conversion_presets
+                (name, label, container,
+                 video_codec, video_bitrate, video_fps, video_preset, video_pixfmt,
+                 audio_codec, audio_bitrate, audio_samplerate, audio_channels,
+                 max_width, max_height, output_ext,
+                 created_at, updated_at)
+            VALUES (?, ?, ?,
+                    ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?,
+                    ?, ?, ?,
+                    ?, ?)
+        """,
+            (
+                preset["name"],
+                preset.get("label", ""),
+                preset["container"],
+                preset.get("video_codec"),
+                preset.get("video_bitrate"),
+                preset.get("video_fps"),
+                preset.get("video_preset"),
+                preset.get("video_pixfmt"),
+                preset.get("audio_codec"),
+                preset.get("audio_bitrate"),
+                preset.get("audio_samplerate"),
+                preset.get("audio_channels"),
+                preset.get("max_width"),
+                preset.get("max_height"),
+                preset["output_ext"],
+                now,
+                now,
+            ),
+        )
 
 
 # ── Profile CRUD ──────────────────────────────────────────────
@@ -100,6 +187,7 @@ def create_profile(data: ProfileCreate) -> Profile:
         data.download_format,
         data.download_quality_mode.value,
         data.download_quality_value,
+        data.convert_preset,
         data.convert_format,
         data.convert_quality_mode.value,
         data.convert_quality_value,
@@ -118,13 +206,13 @@ def create_profile(data: ProfileCreate) -> Profile:
             """
             INSERT INTO profiles (name, label,
                 download_directory, download_format, download_quality_mode, download_quality_value,
-                convert_format, convert_quality_mode, convert_quality_value,
+                convert_preset, convert_format, convert_quality_mode, convert_quality_value,
                 filename_template, playlist_template,
                 embed_metadata, embed_thumbnail, subtitles, subtitle_langs,
                 created_at, updated_at)
             VALUES (?, ?,
                 ?, ?, ?, ?,
-                ?, ?, ?,
+                ?, ?, ?, ?,
                 ?, ?,
                 ?, ?, ?, ?,
                 ?, ?)
@@ -197,3 +285,98 @@ def set_settings(data: dict[str, str]) -> None:
     with _connect() as conn:
         for key, value in data.items():
             conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
+
+
+# ── Conversion Preset CRUD ────────────────────────────────────
+
+
+def list_presets() -> list[ConversionPreset]:
+    with _connect() as conn:
+        rows = conn.execute("SELECT * FROM conversion_presets ORDER BY name").fetchall()
+    return [_row_to_preset(r) for r in rows]
+
+
+def get_preset(preset_id: int) -> ConversionPreset | None:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM conversion_presets WHERE id = ?", (preset_id,)).fetchone()
+    return _row_to_preset(row) if row else None
+
+
+def get_preset_by_name(name: str) -> ConversionPreset | None:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM conversion_presets WHERE name = ?", (name,)).fetchone()
+    return _row_to_preset(row) if row else None
+
+
+def create_preset(data: ConversionPresetCreate) -> ConversionPreset:
+    now = datetime.now(UTC).isoformat()
+    vals = (
+        data.name,
+        data.label or "",
+        data.container,
+        data.video_codec,
+        data.video_bitrate,
+        data.video_fps,
+        data.video_preset,
+        data.video_pixfmt,
+        data.audio_codec,
+        data.audio_bitrate,
+        data.audio_samplerate,
+        data.audio_channels,
+        data.max_width,
+        data.max_height,
+        data.output_ext,
+        now,
+        now,
+    )
+    conn = _connect()
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO conversion_presets
+                (name, label, container,
+                 video_codec, video_bitrate, video_fps, video_preset, video_pixfmt,
+                 audio_codec, audio_bitrate, audio_samplerate, audio_channels,
+                 max_width, max_height, output_ext,
+                 created_at, updated_at)
+            VALUES (?, ?, ?,
+                    ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?,
+                    ?, ?, ?,
+                    ?, ?)
+        """,
+            vals,
+        )
+        preset_id = cur.lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+    assert preset_id is not None
+    result = get_preset(preset_id)
+    assert result is not None
+    return result
+
+
+def update_preset(preset_id: int, data: ConversionPresetUpdate) -> ConversionPreset | None:
+    now = datetime.now(UTC).isoformat()
+    fields: list[str] = []
+    vals: list = []
+
+    for attr, val in data.model_dump(exclude_none=True).items():
+        fields.append(f"{attr} = ?")
+        vals.append(val)
+
+    if not fields:
+        return get_preset(preset_id)
+
+    fields.append("updated_at = ?")
+    vals.append(now)
+    vals.append(preset_id)
+    with _connect() as conn:
+        conn.execute(f"UPDATE conversion_presets SET {', '.join(fields)} WHERE id = ?", vals)
+    return get_preset(preset_id)
+
+
+def delete_preset(preset_id: int) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM conversion_presets WHERE id = ?", (preset_id,))

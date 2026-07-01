@@ -104,6 +104,7 @@ class DownloadVideoRequest(BaseModel):
     output_dir: str | None = Field(None, description="Output directory")
     profile: str | None = Field(None, description="Name of an existing profile to use")
     format_str: str | None = Field(None, description="yt-dlp format string override", alias="format")
+    convert_preset: str | None = Field(None, description="Name of a conversion preset to apply")
     audio_only: bool = False
 
     download_quality_mode: QualityMode | None = None
@@ -123,6 +124,7 @@ class DownloadPlaylistRequest(BaseModel):
     profile: str | None = Field(None, description="Name of an existing profile to use")
     range: str | None = Field(None, description="Playlist item range, e.g. 1-5")
     format_str: str | None = Field(None, description="yt-dlp format string override", alias="format")
+    convert_preset: str | None = Field(None, description="Name of a conversion preset to apply")
     audio_only: bool = False
 
     download_quality_mode: QualityMode | None = None
@@ -161,6 +163,7 @@ class ProfileCreateRequest(BaseModel):
     download_format: str | None = None
     download_quality_mode: QualityMode = QualityMode.best
     download_quality_value: int | None = None
+    convert_preset: str | None = None
     convert_format: str | None = None
     convert_quality_mode: QualityMode = QualityMode.best
     convert_quality_value: int | None = None
@@ -181,6 +184,7 @@ class ProfileUpdateRequest(BaseModel):
     download_format: str | None = None
     download_quality_mode: QualityMode | None = None
     download_quality_value: int | None = None
+    convert_preset: str | None = None
     convert_format: str | None = None
     convert_quality_mode: QualityMode | None = None
     convert_quality_value: int | None = None
@@ -202,6 +206,7 @@ class ProfileResponse(BaseModel):
     download_format: str | None = None
     download_quality_mode: QualityMode = QualityMode.best
     download_quality_value: int | None = None
+    convert_preset: str | None = None
     convert_format: str | None = None
     convert_quality_mode: QualityMode = QualityMode.best
     convert_quality_value: int | None = None
@@ -264,3 +269,69 @@ class OkResponse(BaseModel):
     model_config = _CAMEL_CONFIG
 
     ok: bool = True
+
+
+# ── Conversion Presets ───────────────────────────────────────
+
+
+class ConversionPresetCreateRequest(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    name: str = Field(..., description="Unique preset name")
+    label: str | None = None
+    container: str = Field(..., description="Output container (mp4, mkv, webm, mp3, flac)")
+    video_codec: str | None = Field(None, description="Video codec (h264, hevc, av1, vp9)")
+    video_bitrate: str | None = Field(None, description="Video bitrate (e.g. 5M)")
+    video_fps: float | None = Field(None, description="Video framerate")
+    video_preset: str | None = Field(None, description="ffmpeg encoding preset (slow, medium, fast)")
+    video_pixfmt: str | None = Field(None, description="Pixel format (yuv420p, yuv444p10le)")
+    audio_codec: str | None = Field(None, description="Audio codec (aac, mp3, opus, flac)")
+    audio_bitrate: str | None = Field(None, description="Audio bitrate (e.g. 128k)")
+    audio_samplerate: int | None = Field(None, description="Audio sample rate in Hz")
+    audio_channels: int | None = Field(None, description="Number of audio channels")
+    max_width: int | None = Field(None, description="Max output width (pixels)")
+    max_height: int | None = Field(None, description="Max output height (pixels)")
+    output_ext: str = Field(..., description="Output file extension")
+
+
+class ConversionPresetUpdateRequest(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    name: str | None = None
+    label: str | None = None
+    container: str | None = None
+    video_codec: str | None = None
+    video_bitrate: str | None = None
+    video_fps: float | None = None
+    video_preset: str | None = None
+    video_pixfmt: str | None = None
+    audio_codec: str | None = None
+    audio_bitrate: str | None = None
+    audio_samplerate: int | None = None
+    audio_channels: int | None = None
+    max_width: int | None = None
+    max_height: int | None = None
+    output_ext: str | None = None
+
+
+class ConversionPresetResponse(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    id: int
+    name: str
+    label: str = ""
+    container: str
+    video_codec: str | None = None
+    video_bitrate: str | None = None
+    video_fps: float | None = None
+    video_preset: str | None = None
+    video_pixfmt: str | None = None
+    audio_codec: str | None = None
+    audio_bitrate: str | None = None
+    audio_samplerate: int | None = None
+    audio_channels: int | None = None
+    max_width: int | None = None
+    max_height: int | None = None
+    output_ext: str
+    created_at: datetime
+    updated_at: datetime

@@ -8,8 +8,20 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query
 
 from tube_explore import config, db, ytdlp
-from tube_explore.models import Profile, ProfileCreate, ProfileUpdate, SettingsDict, TaskInfo
+from tube_explore.models import (
+    ConversionPreset,
+    ConversionPresetCreate,
+    ConversionPresetUpdate,
+    Profile,
+    ProfileCreate,
+    ProfileUpdate,
+    SettingsDict,
+    TaskInfo,
+)
 from tube_explore.schemas import (
+    ConversionPresetCreateRequest,
+    ConversionPresetResponse,
+    ConversionPresetUpdateRequest,
     DownloadPlaylistRequest,
     DownloadVideoRequest,
     HealthResponse,
@@ -92,6 +104,10 @@ app = FastAPI(
             "name": "Outbox",
             "description": "List and manage files in the outbox — completed downloads that failed post-processing (e.g. missing ffmpeg).",
         },
+        {
+            "name": "Conversion Presets",
+            "description": "Manage conversion presets — predefined output format configurations (codec, container, resolution, bitrate).",
+        },
     ],
 )
 
@@ -128,9 +144,15 @@ def _run_in_background(tid: str, fn, *args, **kwargs):
         _update_task(tid, status="running")
         try:
             result = fn(*args, **kwargs)
-            outbox = (result or {}).get("outbox")
+            if not result:
+                _update_task(tid, status="completed")
+                return
+            outbox = result.get("outbox")
+            converted = result.get("converted")
             if outbox:
                 _update_task(tid, status="completed", error=f"Files routed to outbox: {outbox}")
+            elif converted:
+                _update_task(tid, status="completed", error=f"Converted to: {converted}")
             else:
                 _update_task(tid, status="completed")
         except Exception as e:
@@ -159,6 +181,16 @@ def _resolve_profile(profile_name: str | None, body_overrides) -> Profile:
 
     now = datetime.now(UTC)
     return Profile(id=0, created_at=now, updated_at=now, **merged.model_dump())
+
+
+def _resolve_convert_preset(body) -> ConversionPreset | None:
+    preset_name = getattr(body, "convert_preset", None)
+    if not preset_name:
+        return None
+    preset = db.get_preset_by_name(preset_name)
+    if not preset:
+        raise HTTPException(404, f"Conversion preset '{preset_name}' not found")
+    return preset
 
 
 # ── Search / Metadata / Playlist ─────────────────────────────
@@ -203,24 +235,26 @@ def _make_settings(raw: dict[str, str]) -> SettingsDict:
     )
 
 
-@app.post("/api/download/video", status_code=202, summary="Download video", description="Start a background task to download a single video. Accepts profile name or per-request overrides for quality, format, directory, and audio-only mode. Returns a task ID for status polling.", tags=["Downloads"])
+@app.post("/api/download/video", status_code=202, summary="Download video", description="Start a background task to download a single video. Accepts profile name or per-request overrides for quality, format, directory, audio-only mode, and a conversion preset. Returns a task ID for status polling.", tags=["Downloads"])
 def download_video(body: DownloadVideoRequest):
     gs = _make_settings(db.get_all_settings())
     profile = _resolve_profile(body.profile, body)
+    conversion_preset = _resolve_convert_preset(body)
 
     out = body.output_dir or profile.download_directory or gs.temp_directory or os.getcwd()
 
     tid = _create_task("video", body.url, body.model_dump(by_alias=True))
     _run_in_background(
-        tid, ytdlp.download_video, body.url, output_dir=out, profile=profile, settings=gs, audio_only=body.audio_only
+        tid, ytdlp.download_video, body.url, output_dir=out, profile=profile, settings=gs, audio_only=body.audio_only, conversion_preset=conversion_preset
     )
     return {"taskId": tid, "status": "pending"}
 
 
-@app.post("/api/download/playlist", status_code=202, summary="Download playlist", description="Start a background task to download all videos in a playlist. Supports optional index range filtering and audio-only mode. Returns a task ID for status polling.", tags=["Downloads"])
+@app.post("/api/download/playlist", status_code=202, summary="Download playlist", description="Start a background task to download all videos in a playlist. Supports optional index range filtering, audio-only mode, and a conversion preset. Returns a task ID for status polling.", tags=["Downloads"])
 def download_playlist(body: DownloadPlaylistRequest):
     gs = _make_settings(db.get_all_settings())
     profile = _resolve_profile(body.profile, body)
+    conversion_preset = _resolve_convert_preset(body)
 
     out = body.output_dir or profile.download_directory or gs.temp_directory or os.getcwd()
 
@@ -234,6 +268,7 @@ def download_playlist(body: DownloadPlaylistRequest):
         settings=gs,
         video_range=body.range,
         audio_only=body.audio_only,
+        conversion_preset=conversion_preset,
     )
     return {"taskId": tid, "status": "pending"}
 
@@ -359,4 +394,50 @@ def delete_outbox_file(file_name: str):
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(404, f"File '{file_name}' not found in outbox")
     file_path.unlink()
+    return OkResponse()
+
+
+# ── Conversion Presets ───────────────────────────────────────
+
+
+@app.get("/api/convert-presets", response_model=list[ConversionPresetResponse], summary="List conversion presets", description="List all predefined and custom output format presets.", tags=["Conversion Presets"])
+def list_convert_presets():
+    return db.list_presets()
+
+
+@app.post("/api/convert-presets", response_model=ConversionPresetResponse, status_code=201, summary="Create conversion preset", description="Create a custom output format preset with container, codecs, bitrate, resolution, and other encoding parameters.", tags=["Conversion Presets"])
+def create_convert_preset(body: ConversionPresetCreateRequest):
+    existing = db.get_preset_by_name(body.name)
+    if existing:
+        raise HTTPException(409, f"Conversion preset '{body.name}' already exists")
+    p = db.create_preset(ConversionPresetCreate(**body.model_dump()))
+    return p
+
+
+@app.get("/api/convert-presets/{preset_name}", response_model=ConversionPresetResponse, summary="Get conversion preset", description="Retrieve a single conversion preset by name.", tags=["Conversion Presets"])
+def get_convert_preset(preset_name: str):
+    p = db.get_preset_by_name(preset_name)
+    if not p:
+        raise HTTPException(404, f"Conversion preset '{preset_name}' not found")
+    return p
+
+
+@app.put("/api/convert-presets/{preset_name}", response_model=ConversionPresetResponse, summary="Update conversion preset", description="Update an existing conversion preset. Only provided fields are changed.", tags=["Conversion Presets"])
+def update_convert_preset(preset_name: str, body: ConversionPresetUpdateRequest):
+    existing = db.get_preset_by_name(preset_name)
+    if not existing:
+        raise HTTPException(404, f"Conversion preset '{preset_name}' not found")
+    data = body.model_dump(exclude_none=True)
+    if not data:
+        return existing
+    p = db.update_preset(existing.id, ConversionPresetUpdate(**data))
+    return p
+
+
+@app.delete("/api/convert-presets/{preset_name}", response_model=OkResponse, summary="Delete conversion preset", description="Remove a conversion preset by name.", tags=["Conversion Presets"])
+def delete_convert_preset(preset_name: str):
+    existing = db.get_preset_by_name(preset_name)
+    if not existing:
+        raise HTTPException(404, f"Conversion preset '{preset_name}' not found")
+    db.delete_preset(existing.id)
     return OkResponse()

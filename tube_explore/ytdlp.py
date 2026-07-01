@@ -4,11 +4,12 @@ import shutil
 import subprocess
 import urllib.error
 import urllib.request
+from contextlib import suppress
 from datetime import datetime
 from typing import Any
 
 from tube_explore import config
-from tube_explore.models import Profile, QualityMode, SettingsDict
+from tube_explore.models import ConversionPreset, Profile, QualityMode, SettingsDict
 
 YTDLP_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -143,6 +144,101 @@ def _build_args(
     return args
 
 
+# ── Conversion engine ─────────────────────────────────────────
+
+
+def _build_conversion_args(
+    input_path: str,
+    output_path: str,
+    preset: ConversionPreset,
+) -> list[str]:
+    args = ["-i", input_path]
+
+    if preset.video_codec:
+        codec_map = {"h264": "libx264", "hevc": "libx265", "av1": "libaom-av1", "vp9": "libvpx-vp9"}
+        args += ["-c:v", codec_map.get(preset.video_codec, preset.video_codec)]
+
+    if preset.video_bitrate:
+        args += ["-b:v", preset.video_bitrate]
+
+    if preset.video_fps:
+        args += ["-r", str(preset.video_fps)]
+
+    if preset.video_preset:
+        args += ["-preset", preset.video_preset]
+
+    if preset.video_pixfmt:
+        args += ["-pix_fmt", preset.video_pixfmt]
+
+    if preset.audio_codec:
+        codec_map = {"aac": "aac", "mp3": "libmp3lame", "opus": "libopus", "flac": "flac", "vorbis": "libvorbis"}
+        args += ["-c:a", codec_map.get(preset.audio_codec, preset.audio_codec)]
+
+    if preset.audio_bitrate:
+        args += ["-b:a", preset.audio_bitrate]
+
+    if preset.audio_samplerate:
+        args += ["-ar", str(preset.audio_samplerate)]
+
+    if preset.audio_channels:
+        args += ["-ac", str(preset.audio_channels)]
+
+    vf_parts: list[str] = []
+    if preset.max_width or preset.max_height:
+        w = preset.max_width or -1
+        h = preset.max_height or -1
+        vf_parts.append(f"scale={w}:{h}:force_original_aspect_ratio=decrease")
+
+    if vf_parts:
+        args += ["-vf", ",".join(vf_parts)]
+
+    args += ["-y", output_path]
+    return args
+
+
+def _run_conversion(dl_dir: str, preset: ConversionPreset) -> str | None:
+    if not HAS_FFMPEG:
+        return None
+
+    video_exts = {".mp4", ".mkv", ".webm", ".avi", ".mov", ".ts"}
+    candidates: list[tuple[str, int]] = []
+
+    for entry in os.listdir(dl_dir):
+        path = os.path.join(dl_dir, entry)
+        if not os.path.isfile(path):
+            continue
+        ext = os.path.splitext(entry)[1].lower()
+        if ext in video_exts:
+            candidates.append((path, os.path.getsize(path)))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    input_path = candidates[0][0]
+    base = os.path.splitext(input_path)[0]
+    output_path = f"{base}.{preset.output_ext}"
+
+    args = _build_conversion_args(input_path, output_path, preset)
+    cmd = ["ffmpeg"] + args
+
+    try:
+        subprocess.run(cmd, capture_output=True, text=True, timeout=600, check=True)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        stderr = getattr(e, "stderr", str(e)) or str(e)
+        raise RuntimeError(f"Conversion failed: {stderr[:500]}") from e
+
+    for entry in os.listdir(dl_dir):
+        path = os.path.join(dl_dir, entry)
+        if path == output_path:
+            continue
+        if os.path.isfile(path) and os.path.splitext(entry)[1].lower() in video_exts | {".opus", ".m4a", ".aac", ".flac", ".mp3", ".wav", ".ogg"}:
+            with suppress(OSError):
+                os.remove(path)
+
+    return output_path
+
+
 def _resolve_dir(
     profile_dir: str,
     request_dir: str | None,
@@ -166,6 +262,7 @@ def _download_with_profile(
     is_playlist: bool = False,
     video_range: str | None = None,
     audio_only: bool = False,
+    conversion_preset: ConversionPreset | None = None,
 ) -> dict[str, Any]:
     temp_dir = settings.temp_directory.strip()
     final_dir = output_dir
@@ -196,6 +293,16 @@ def _download_with_profile(
     if temp_dir and final_dir != temp_dir:
         _move_downloads(dl_dir, final_dir)
         dl_dir = final_dir
+
+    if conversion_preset and HAS_FFMPEG:
+        try:
+            converted = _run_conversion(dl_dir, conversion_preset)
+            if converted:
+                result["converted"] = converted
+        except RuntimeError:
+            _route_to_outbox(dl_dir, outbox_dir)
+            result["outbox"] = outbox_dir
+            return result
 
     if not HAS_FFMPEG and not audio_only:
         _route_to_outbox(dl_dir, outbox_dir)
@@ -322,6 +429,7 @@ def download_video(
     profile: Profile | None = None,
     settings: SettingsDict | None = None,
     audio_only: bool = False,
+    conversion_preset: ConversionPreset | None = None,
 ) -> dict[str, Any]:
     if profile is None:
         profile = Profile(id=0, name="_adhoc", created_at=datetime.now(), updated_at=datetime.now())
@@ -329,7 +437,7 @@ def download_video(
         settings = SettingsDict()
 
     out = _resolve_dir(profile.download_directory, output_dir, settings)
-    return _download_with_profile(url, out, profile, settings, is_playlist=False, audio_only=audio_only)
+    return _download_with_profile(url, out, profile, settings, is_playlist=False, audio_only=audio_only, conversion_preset=conversion_preset)
 
 
 def download_playlist(
@@ -339,6 +447,7 @@ def download_playlist(
     settings: SettingsDict | None = None,
     video_range: str | None = None,
     audio_only: bool = False,
+    conversion_preset: ConversionPreset | None = None,
 ) -> dict[str, Any]:
     if profile is None:
         profile = Profile(id=0, name="_adhoc", created_at=datetime.now(), updated_at=datetime.now())
@@ -347,5 +456,5 @@ def download_playlist(
 
     out = _resolve_dir(profile.download_directory, output_dir, settings)
     return _download_with_profile(
-        url, out, profile, settings, is_playlist=True, video_range=video_range, audio_only=audio_only
+        url, out, profile, settings, is_playlist=True, video_range=video_range, audio_only=audio_only, conversion_preset=conversion_preset
     )
