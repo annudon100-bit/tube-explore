@@ -602,7 +602,7 @@ def delete_outbox_file(file_id: str):
     return OkResponse()
 
 
-@app.post("/api/outbox/{file_id}/process", response_model=OkResponse, responses=_404, summary="Retry conversion on outbox file", description="Attempt to convert an outbox file again using the specified conversion preset. Requires ffmpeg. On success the converted file replaces the original in the outbox.", tags=["Outbox"])
+@app.post("/api/outbox/{file_id}/process", response_model=OkResponse, responses=_404, summary="Retry conversion on outbox file", description="Attempt to convert an outbox file using the specified conversion preset. Requires ffmpeg. On success the converted file is moved out of the outbox to the specified download directory (or current working directory) and the outbox entry is removed.", tags=["Outbox"])
 def process_outbox_file(file_id: str, body: OutboxProcessRequest):
     record = db.get_outbox_file(file_id)
     if not record:
@@ -638,26 +638,14 @@ def process_outbox_file(file_id: str, body: OutboxProcessRequest):
         db.update_outbox_file_status(file_id, "failed", error=err)
         raise HTTPException(422, err)
 
+    target_dir = Path(body.download_directory) if body.download_directory else Path.cwd()
+    target_dir.mkdir(parents=True, exist_ok=True)
     output_name = f"{file_path.stem}.{cp.output_ext}"
-    output_path = outbox_dir / output_name
+    output_path = target_dir / output_name
     shutil.move(converted, str(output_path))
     file_path.unlink()
 
-    db.update_outbox_file_status(file_id, "completed")
-    db.insert_outbox_file(
-        OutboxFileCreate(
-            id=str(uuid.uuid4()),
-            file_name=output_name,
-            file_size=output_path.stat().st_size,
-            media_url=record.media_url,
-            task_id=record.task_id,
-            quality_mode=record.quality_mode,
-            quality_value=record.quality_value,
-            convert_preset=body.preset,
-            status="completed",
-            created_at=datetime.now(UTC),
-        )
-    )
+    db.delete_outbox_file(file_id)
 
     return OkResponse()
 

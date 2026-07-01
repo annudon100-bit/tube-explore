@@ -304,6 +304,7 @@ class OutboxProcessRequest(BaseModel):
     model_config = _CAMEL_CONFIG
 
     preset: str = Field(..., description="Conversion preset name to apply")
+    download_directory: str | None = Field(None, alias="downloadDirectory", description="Directory to place the converted file. Defaults to current working directory.")
 
 
 # ── Generic ───────────────────────────────────────────────────
