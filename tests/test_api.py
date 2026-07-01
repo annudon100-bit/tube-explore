@@ -3,7 +3,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from tube_explore import config
-from tube_explore.api import app
+from tube_explore.api import _create_task, _lock, _sub_lock, _subscribe, _subscribers, _tasks, _unsubscribe, app
 
 client = TestClient(app)
 
@@ -318,3 +318,38 @@ def test_delete_convert_preset():
 def test_delete_nonexistent_convert_preset():
     resp = client.delete("/api/convert-presets/nonexistent")
     assert resp.status_code == 404
+
+
+# ── SSE ────────────────────────────────────────────────────────
+
+
+def _clear_tasks():
+    with _lock:
+        _tasks.clear()
+
+
+def test_sse_returns_404_for_nonexistent_task():
+    resp = client.get("/api/tasks/nonexistent/stream")
+    assert resp.status_code == 404
+
+
+def test_sse_subscribe_unsubscribe():
+    _clear_tasks()
+    tid = _create_task("video", "https://x.com/v", {})
+    q = _subscribe(tid)
+    with _sub_lock:
+        assert tid in _subscribers
+        assert q in _subscribers[tid]
+    _unsubscribe(tid, q)
+    with _sub_lock:
+        assert not _subscribers.get(tid) or q not in _subscribers[tid]
+
+
+def test_sse_publish_delivers_to_queue():
+    _clear_tasks()
+    tid = _create_task("video", "https://x.com/v", {})
+    q = _subscribe(tid)
+    q.put_nowait({"status": "running"})
+    data = q.get_nowait()
+    assert data["status"] == "running"
+    _unsubscribe(tid, q)

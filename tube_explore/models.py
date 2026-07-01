@@ -159,4 +159,5 @@ class TaskInfo(BaseModel):
     params: dict[str, object] = {}
     status: str = "pending"
     created_at: datetime
+    updated_at: datetime | None = None
     error: str | None = None

@@ -1,3 +1,5 @@
+import asyncio
+import json
 import os
 import threading
 import uuid
@@ -6,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
 from tube_explore import config, db, ytdlp
 from tube_explore.models import (
@@ -43,6 +46,8 @@ from tube_explore.schemas import (
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    global _main_loop
+    _main_loop = asyncio.get_running_loop()
     db.init_db()
     yield
 
@@ -117,6 +122,40 @@ _tasks: dict[str, TaskInfo] = {}
 _lock = threading.Lock()
 
 
+# ── SSE event bus ────────────────────────────────────────────
+_main_loop: asyncio.AbstractEventLoop | None = None
+_subscribers: dict[str, set[asyncio.Queue]] = {}
+_sub_lock = threading.Lock()
+
+
+def _subscribe(tid: str) -> asyncio.Queue:
+    q: asyncio.Queue = asyncio.Queue()
+    with _sub_lock:
+        _subscribers.setdefault(tid, set()).add(q)
+    return q
+
+
+def _unsubscribe(tid: str, q: asyncio.Queue) -> None:
+    with _sub_lock:
+        s = _subscribers.get(tid)
+        if s:
+            s.discard(q)
+            if not s:
+                _subscribers.pop(tid, None)
+
+
+def _publish(tid: str, data: dict) -> None:
+    with _sub_lock:
+        queues = set(_subscribers.get(tid, []))
+    if not queues:
+        return
+    for q in queues:
+        if _main_loop and _main_loop.is_running():
+            _main_loop.call_soon_threadsafe(q.put_nowait, data)
+        else:
+            q.put_nowait(data)
+
+
 def _create_task(task_type: str, url: str, params: dict[str, object]) -> str:
     tid = str(uuid.uuid4())
     task = TaskInfo(
@@ -135,8 +174,13 @@ def _create_task(task_type: str, url: str, params: dict[str, object]) -> str:
 
 def _update_task(tid: str, **kwargs):
     with _lock:
-        if tid in _tasks:
-            _tasks[tid] = _tasks[tid].model_copy(update=kwargs)
+        task = _tasks.get(tid)
+        if task is None:
+            return
+        task = task.model_copy(update=kwargs | {"updated_at": datetime.now(UTC)})
+        _tasks[tid] = task
+        data = task.model_dump(mode="json")
+    _publish(tid, data)
 
 
 def _run_in_background(tid: str, fn, *args, **kwargs):
@@ -289,6 +333,32 @@ def get_task(task_id: str):
 def list_tasks():
     with _lock:
         return list(_tasks.values())
+
+
+@app.get("/api/tasks/{task_id}/stream", summary="Task status SSE stream", description="Subscribe to real-time status updates for a background task. Sends the current state immediately, then pushes updates until the task completes or fails. Sends keepalive every 30s.", tags=["Tasks"])
+async def task_stream(task_id: str):
+    with _lock:
+        task = _tasks.get(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+
+    q = _subscribe(task_id)
+
+    async def event_gen():
+        try:
+            yield f"event: update\ndata: {task.model_dump_json()}\n\n"
+            while True:
+                data = await asyncio.wait_for(q.get(), timeout=30)
+                yield f"event: update\ndata: {json.dumps(data)}\n\n"
+                if data.get("status") in ("completed", "failed"):
+                    yield "event: done\ndata: {}\n\n"
+                    return
+        except TimeoutError:
+            yield "event: keepalive\ndata: {}\n\n"
+        finally:
+            _unsubscribe(task_id, q)
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")
 
 
 # ── Profiles ─────────────────────────────────────────────────
