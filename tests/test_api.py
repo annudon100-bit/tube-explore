@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from tube_explore import config
@@ -222,6 +223,34 @@ def test_delete_outbox_file():
 def test_delete_nonexistent_outbox_file():
     resp = client.delete("/api/outbox/nonexistent.mkv")
     assert resp.status_code == 404
+
+
+def test_process_outbox_file_nonexistent():
+    resp = client.post("/api/outbox/nope.mp4/process?preset=MP4+1080p")
+    assert resp.status_code == 404
+
+
+def test_process_outbox_file_no_ffmpeg():
+    from tube_explore.ytdlp import HAS_FFMPEG
+    if HAS_FFMPEG:
+        pytest.skip("ffmpeg is available, cannot test no-ffmpeg branch")
+    outbox = Path(config.get_outbox_dir())
+    (outbox / "noffmpeg.mp4").write_text("dummy")
+    try:
+        resp = client.post("/api/outbox/noffmpeg.mp4/process?preset=MP4+1080p")
+        assert resp.status_code == 400
+    finally:
+        (outbox / "noffmpeg.mp4").unlink(missing_ok=True)
+
+
+def test_process_outbox_file_nonexistent_preset():
+    outbox = Path(config.get_outbox_dir())
+    (outbox / "some_file.mp4").write_text("dummy")
+    try:
+        resp = client.post("/api/outbox/some_file.mp4/process?preset=NONEXISTENT")
+        assert resp.status_code == 404
+    finally:
+        (outbox / "some_file.mp4").unlink(missing_ok=True)
 
 
 # ── Conversion Presets ────────────────────────────────────────

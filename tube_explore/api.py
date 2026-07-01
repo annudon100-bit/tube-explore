@@ -1,6 +1,8 @@
 import asyncio
 import json
 import os
+import shutil
+import tempfile
 import threading
 import uuid
 from contextlib import asynccontextmanager
@@ -471,6 +473,38 @@ def delete_outbox_file(file_name: str):
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(404, f"File '{file_name}' not found in outbox")
     file_path.unlink()
+    return OkResponse()
+
+
+@app.post("/api/outbox/{file_name}/process", response_model=OkResponse, summary="Retry conversion on outbox file", description="Attempt to convert an outbox file again using the specified conversion preset. Requires ffmpeg. On success the converted file replaces the original in the outbox.", tags=["Outbox"])
+def process_outbox_file(file_name: str, preset: str = Query(..., description="Name of the conversion preset to apply")):
+    outbox_dir = Path(config.get_outbox_dir())
+    file_path = outbox_dir / file_name
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(404, f"File '{file_name}' not found in outbox")
+
+    cp = db.get_preset_by_name(preset)
+    if not cp:
+        raise HTTPException(404, f"Conversion preset '{preset}' not found")
+
+    if not ytdlp.HAS_FFMPEG:
+        raise HTTPException(400, "ffmpeg is not available; cannot retry conversion")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        shutil.copy2(str(file_path), tmpdir)
+        try:
+            converted = ytdlp._run_conversion(tmpdir, cp)
+        except RuntimeError as e:
+            raise HTTPException(422, str(e)) from e
+
+    if not converted:
+        raise HTTPException(422, "Conversion produced no output file")
+
+    output_name = f"{file_path.stem}.{cp.output_ext}"
+    output_path = outbox_dir / output_name
+    shutil.move(converted, str(output_path))
+    file_path.unlink()
+
     return OkResponse()
 
 
