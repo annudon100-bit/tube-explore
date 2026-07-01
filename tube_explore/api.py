@@ -8,7 +8,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -417,7 +417,7 @@ def get_task_result(task_id: str):
     if not task:
         raise HTTPException(404, "Task not found")
     files = [DownloadedFile(**f) for f in (task.result or [])]
-    return TaskResultResponse(task_id=task.id, status=task.status, files=files)
+    return TaskResultResponse(task_id=task.id, status=cast("Literal['pending', 'running', 'completed', 'failed', 'cancelled']", task.status), files=files)
 
 
 @app.post("/api/tasks/{task_id}/cancel", responses=_404_409, summary="Cancel task", description="Cancel a pending or running task. Sets status to `cancelled` so the result is discarded.", tags=["Tasks"])
@@ -576,7 +576,7 @@ def _list_outbox() -> list[OutboxEntry]:
                 quality_mode=r.quality_mode,
                 quality_value=r.quality_value,
                 convert_preset=r.convert_preset,
-                status=r.status,
+                status=cast("Literal['pending', 'processing', 'completed', 'failed']", r.status),
                 error=r.error,
                 created_at=r.created_at,
                 updated_at=r.updated_at,

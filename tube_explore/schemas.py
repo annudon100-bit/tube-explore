@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -158,7 +158,7 @@ class DownloadTaskCreatedResponse(BaseModel):
     model_config = _CAMEL_CONFIG
 
     task_id: str = Field(..., description="Task ID for status polling")
-    status: str = Field("pending", description="Initial task status")
+    status: Literal["pending"] = Field("pending", description="Initial task status")
     status_url: str = Field(..., description="URL to poll task status")
     stream_url: str = Field(..., description="URL to stream task status updates via SSE")
 
@@ -178,10 +178,10 @@ class TaskResponse(BaseModel):
     model_config = _CAMEL_CONFIG
 
     id: str
-    type: str
+    type: Literal["video", "playlist"]
     url: str
     params: dict[str, object] = {}
-    status: str = "pending"
+    status: Literal["pending", "running", "completed", "failed", "cancelled"] = "pending"
     progress_percent: int = Field(0, validation_alias="progressPercent")
     created_at: datetime
     updated_at: datetime | None = None
@@ -194,7 +194,7 @@ class TaskResultResponse(BaseModel):
     model_config = _CAMEL_CONFIG
 
     task_id: str = Field(..., description="Task ID")
-    status: str = Field(..., description="Task status")
+    status: Literal["pending", "running", "completed", "failed", "cancelled"] = Field(..., description="Task status")
     files: list[DownloadedFile] = Field(default_factory=list, description="List of downloaded files")
 
 
@@ -326,7 +326,7 @@ class OutboxEntry(BaseModel):
     quality_mode: str | None = Field(None, description="Quality mode used for download")
     quality_value: int | None = Field(None, description="Quality value used for download")
     convert_preset: str | None = Field(None, description="Conversion preset attempted")
-    status: str = Field("pending", description="Processing status (pending, processing, completed, failed)")
+    status: Literal["pending", "processing", "completed", "failed"] = Field("pending", description="Processing status (pending, processing, completed, failed)")
     error: str | None = Field(None, description="Error message if processing failed")
     created_at: datetime = Field(..., description="When the file was added to outbox")
     updated_at: datetime | None = Field(None, description="When the record was last updated")
