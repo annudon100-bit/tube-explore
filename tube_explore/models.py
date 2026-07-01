@@ -160,7 +160,9 @@ class TaskInfo(BaseModel):
     status: str = "pending"
     created_at: datetime
     updated_at: datetime | None = None
+    completed_at: datetime | None = None
     error: str | None = None
+    result: Any = None
 
 
 class OutboxFile(BaseModel):

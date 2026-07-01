@@ -28,6 +28,7 @@ from tube_explore.schemas import (
     ConversionPresetCreateRequest,
     ConversionPresetResponse,
     ConversionPresetUpdateRequest,
+    DownloadedFile,
     DownloadPlaylistRequest,
     DownloadTaskCreatedResponse,
     DownloadVideoRequest,
@@ -46,6 +47,7 @@ from tube_explore.schemas import (
     SettingsResponse,
     SettingsUpdateRequest,
     TaskResponse,
+    TaskResultResponse,
 )
 
 
@@ -172,6 +174,8 @@ def _create_task(task_type: str, url: str, params: dict[str, object]) -> str:
         status="pending",
         created_at=datetime.now(UTC),
         error=None,
+        completed_at=None,
+        result=None,
     )
     with _lock:
         _tasks[tid] = task
@@ -183,7 +187,10 @@ def _update_task(tid: str, **kwargs):
         task = _tasks.get(tid)
         if task is None:
             return
-        task = task.model_copy(update=kwargs | {"updated_at": datetime.now(UTC)})
+        extra: dict[str, object] = {"updated_at": datetime.now(UTC)}
+        if kwargs.get("status") in ("completed", "failed"):
+            extra["completed_at"] = datetime.now(UTC)
+        task = task.model_copy(update=kwargs | extra)
         _tasks[tid] = task
         data = task.model_dump(mode="json")
     _publish(tid, data)
@@ -199,10 +206,13 @@ def _run_in_background(tid: str, fn, *args, **kwargs):
                 return
             outbox = result.get("outbox")
             converted = result.get("converted")
+            files = result.get("files")
             if outbox:
                 _update_task(tid, status="completed", error=f"Files routed to outbox: {outbox}")
             elif converted:
-                _update_task(tid, status="completed", error=f"Converted to: {converted}")
+                _update_task(tid, status="completed", error=f"Converted to: {converted}", result=files)
+            elif files:
+                _update_task(tid, status="completed", result=files)
             else:
                 _update_task(tid, status="completed")
         except Exception as e:
@@ -391,6 +401,16 @@ async def task_stream(task_id: str):
             _unsubscribe(task_id, q)
 
     return StreamingResponse(event_gen(), media_type="text/event-stream")
+
+
+@app.get("/api/tasks/{task_id}/result", response_model=TaskResultResponse, summary="Get task result", description="Retrieve the files produced by a completed download task. Returns file names, sizes, and absolute paths.", tags=["Tasks"])
+def get_task_result(task_id: str):
+    with _lock:
+        task = _tasks.get(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    files = [DownloadedFile(**f) for f in (task.result or [])]
+    return TaskResultResponse(task_id=task.id, status=task.status, files=files)
 
 
 # ── Profiles ─────────────────────────────────────────────────

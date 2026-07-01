@@ -361,7 +361,21 @@ def _download_with_profile(
         os.makedirs(final_dir, exist_ok=True)
         _move_downloads(dl_dir, final_dir)
 
+    result["files"] = _collect_files(final_dir)
     return result
+
+
+def _collect_files(directory: str) -> list[dict[str, Any]]:
+    files: list[dict[str, Any]] = []
+    for entry in sorted(os.listdir(directory)):
+        path = os.path.join(directory, entry)
+        if os.path.isfile(path):
+            files.append({
+                "name": entry,
+                "size": os.path.getsize(path),
+                "path": path,
+            })
+    return files
 
 
 def _route_to_outbox(src: str, outbox_dir: str) -> list[str]:

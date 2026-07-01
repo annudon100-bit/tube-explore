@@ -150,6 +150,14 @@ class DownloadTaskCreatedResponse(BaseModel):
 # ── Task ──────────────────────────────────────────────────────
 
 
+class DownloadedFile(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    name: str = Field(..., description="File name")
+    size: int = Field(..., description="File size in bytes")
+    path: str = Field(..., description="Absolute path to the file on disk")
+
+
 class TaskResponse(BaseModel):
     model_config = _CAMEL_CONFIG
 
@@ -159,7 +167,18 @@ class TaskResponse(BaseModel):
     params: dict[str, object] = {}
     status: str = "pending"
     created_at: datetime
+    updated_at: datetime | None = None
+    completed_at: datetime | None = None
     error: str | None = None
+    result: list[DownloadedFile] | None = None
+
+
+class TaskResultResponse(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    task_id: str = Field(..., description="Task ID")
+    status: str = Field(..., description="Task status")
+    files: list[DownloadedFile] = Field(default_factory=list, description="List of downloaded files")
 
 
 # ── Profile ───────────────────────────────────────────────────
