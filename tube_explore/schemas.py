@@ -103,8 +103,7 @@ class DownloadVideoRequest(BaseModel):
     url: str = Field(..., description="Media video URL")
     output_dir: str | None = Field(None, description="Relative subdirectory appended to the profile's download directory")
     download_path_override: str | None = Field(None, alias="downloadPathOverride", description="Absolute path override for the final output destination. Ignores profile's download_directory.")
-    profile: str | None = Field(None, description="Name of an existing profile to use")
-    format_str: str | None = Field(None, description="yt-dlp format string override", alias="format")
+    profile_id: str | None = Field(None, alias="profileId", description="Name of an existing profile to use")
     convert_preset: str | None = Field(None, description="Name of a conversion preset to apply")
     audio_only: bool = False
 
@@ -123,9 +122,8 @@ class DownloadPlaylistRequest(BaseModel):
     url: str = Field(..., description="Media playlist URL")
     output_dir: str | None = Field(None, description="Relative subdirectory appended to the profile's download directory")
     download_path_override: str | None = Field(None, alias="downloadPathOverride", description="Absolute path override for the final output destination. Ignores profile's download_directory.")
-    profile: str | None = Field(None, description="Name of an existing profile to use")
+    profile_id: str | None = Field(None, alias="profileId", description="Name of an existing profile to use")
     range: str | None = Field(None, description="Playlist item range, e.g. 1-5")
-    format_str: str | None = Field(None, description="yt-dlp format string override", alias="format")
     convert_preset: str | None = Field(None, description="Name of a conversion preset to apply")
     audio_only: bool = False
 

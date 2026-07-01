@@ -332,7 +332,7 @@ def _make_settings(raw: dict[str, str]) -> SettingsDict:
 @app.post("/api/download/video", response_model=DownloadTaskCreatedResponse, status_code=202, responses=_404, summary="Download video", description="Start a background task to download a single video. Accepts profile name or per-request overrides for quality, format, directory, audio-only mode, and a conversion preset. Returns a task ID for status polling.", tags=["Downloads"])
 def download_video(body: DownloadVideoRequest):
     gs = _make_settings(db.get_all_settings())
-    profile = _resolve_profile(body.profile, body)
+    profile = _resolve_profile(body.profile_id, body)
     conversion_preset = _resolve_convert_preset(body)
     out = _resolve_output_path(body, profile)
 
@@ -346,7 +346,7 @@ def download_video(body: DownloadVideoRequest):
 @app.post("/api/download/playlist", response_model=DownloadTaskCreatedResponse, status_code=202, responses=_404, summary="Download playlist", description="Start a background task to download all videos in a playlist. Supports optional index range filtering, audio-only mode, and a conversion preset. Returns a task ID for status polling.", tags=["Downloads"])
 def download_playlist(body: DownloadPlaylistRequest):
     gs = _make_settings(db.get_all_settings())
-    profile = _resolve_profile(body.profile, body)
+    profile = _resolve_profile(body.profile_id, body)
     conversion_preset = _resolve_convert_preset(body)
     out = _resolve_output_path(body, profile)
 
@@ -437,7 +437,7 @@ def _re_run_task(task: TaskInfo) -> str:
     params = task.params
     if task.type == "video":
         body = DownloadVideoRequest.model_validate(params)
-        profile = _resolve_profile(body.profile, body)
+        profile = _resolve_profile(body.profile_id, body)
         conversion_preset = _resolve_convert_preset(body)
         out = _resolve_output_path(body, profile)
         tid = _create_task("video", body.url, body.model_dump(by_alias=True))
@@ -448,7 +448,7 @@ def _re_run_task(task: TaskInfo) -> str:
         return tid
     # playlist
     pl_body = DownloadPlaylistRequest.model_validate(params)
-    profile = _resolve_profile(pl_body.profile, pl_body)
+    profile = _resolve_profile(pl_body.profile_id, pl_body)
     conversion_preset = _resolve_convert_preset(pl_body)
     out = _resolve_output_path(pl_body, profile)
     tid = _create_task("playlist", pl_body.url, pl_body.model_dump(by_alias=True))
@@ -521,13 +521,13 @@ def update_profile(profile_id: int, body: ProfileUpdateRequest):
     return p
 
 
-@app.delete("/api/profiles/{profile_id}", responses=_404, summary="Delete profile", description="Delete a download profile by its ID. Returns `{\"ok\": true}` on success.", tags=["Profiles"])
+@app.delete("/api/profiles/{profile_id}", response_model=OkResponse, responses=_404, summary="Delete profile", description="Delete a download profile by its ID.", tags=["Profiles"])
 def delete_profile(profile_id: int):
     existing = db.get_profile(profile_id)
     if not existing:
         raise HTTPException(404, "Profile not found")
     db.delete_profile(profile_id)
-    return {"ok": True}
+    return OkResponse()
 
 
 # ── Global settings ──────────────────────────────────────────

@@ -163,7 +163,7 @@ def test_download_video_unknown_profile():
         "/api/download/video",
         json={
             "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-            "profile": "nonexistent",
+            "profileId": "nonexistent",
         },
     )
     assert resp.status_code == 404
