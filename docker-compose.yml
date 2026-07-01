@@ -1,0 +1,14 @@
+services:
+  tube-explore:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      CONFIG_DIRECTORY: /app/config
+    volumes:
+      - downloads:/app/downloads
+      - config:/app/config
+
+volumes:
+  downloads:
+  config:

@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage/
+htmlcov/
+*.pid
+
+# Environment
+.env
+.env.*
+.venv/
+venv/
+.python-version
+
+# Project data
+config/
+downloads/
+*.db
+*.db-wal
+*.db-shm
+
+# yt-dlp binary
+yt-dlp
+
+# Editors & OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.log
+
+# Docker
+.docker/
