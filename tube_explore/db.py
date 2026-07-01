@@ -9,6 +9,8 @@ from tube_explore.models import (
     ConversionPreset,
     ConversionPresetCreate,
     ConversionPresetUpdate,
+    OutboxFile,
+    OutboxFileCreate,
     Profile,
     ProfileCreate,
     ProfileUpdate,
@@ -99,6 +101,21 @@ def init_db() -> None:
                 output_ext        TEXT NOT NULL,
                 created_at        TEXT NOT NULL,
                 updated_at        TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS outbox_files (
+                id                TEXT PRIMARY KEY,
+                file_name         TEXT NOT NULL,
+                file_size         INTEGER NOT NULL,
+                media_url         TEXT DEFAULT NULL,
+                task_id           TEXT DEFAULT NULL,
+                quality_mode      TEXT DEFAULT NULL,
+                quality_value     INTEGER DEFAULT NULL,
+                convert_preset    TEXT DEFAULT NULL,
+                status            TEXT NOT NULL DEFAULT 'pending',
+                error             TEXT DEFAULT NULL,
+                created_at        TEXT NOT NULL,
+                updated_at        TEXT DEFAULT NULL
             );
         """)
 
@@ -380,3 +397,92 @@ def update_preset(preset_id: int, data: ConversionPresetUpdate) -> ConversionPre
 def delete_preset(preset_id: int) -> None:
     with _connect() as conn:
         conn.execute("DELETE FROM conversion_presets WHERE id = ?", (preset_id,))
+
+
+# ── Outbox Files ────────────────────────────────────────────────
+
+
+def _row_to_outbox_file(row: sqlite3.Row) -> OutboxFile:
+    return OutboxFile(
+        id=row["id"],
+        file_name=row["file_name"],
+        file_size=row["file_size"],
+        media_url=row["media_url"],
+        task_id=row["task_id"],
+        quality_mode=row["quality_mode"],
+        quality_value=row["quality_value"],
+        convert_preset=row["convert_preset"],
+        status=row["status"],
+        error=row["error"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None,
+    )
+
+
+def insert_outbox_file(data: OutboxFileCreate) -> OutboxFile:
+    now = data.created_at.isoformat()
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO outbox_files
+                (id, file_name, file_size,
+                 media_url, task_id,
+                 quality_mode, quality_value, convert_preset,
+                 status, error,
+                 created_at, updated_at)
+            VALUES (?, ?, ?,
+                    ?, ?,
+                    ?, ?, ?,
+                    ?, ?,
+                    ?, ?)
+            """,
+            (
+                data.id,
+                data.file_name,
+                data.file_size,
+                data.media_url,
+                data.task_id,
+                data.quality_mode,
+                data.quality_value,
+                data.convert_preset,
+                data.status,
+                data.error,
+                now,
+                None,
+            ),
+        )
+        conn.commit()
+    result = get_outbox_file(data.id)
+    assert result is not None
+    return result
+
+
+def get_outbox_file(file_id: str) -> OutboxFile | None:
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.execute("SELECT * FROM outbox_files WHERE id = ?", (file_id,))
+        row = cur.fetchone()
+    return _row_to_outbox_file(row) if row else None
+
+
+def list_outbox_files() -> list[OutboxFile]:
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.execute("SELECT * FROM outbox_files ORDER BY created_at DESC")
+        return [_row_to_outbox_file(r) for r in cur.fetchall()]
+
+
+def delete_outbox_file(file_id: str) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM outbox_files WHERE id = ?", (file_id,))
+
+
+def update_outbox_file_status(file_id: str, status: str, error: str | None = None) -> OutboxFile | None:
+    now = datetime.now(UTC).isoformat()
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE outbox_files SET status = ?, error = ?, updated_at = ? WHERE id = ?",
+            (status, error, now, file_id),
+        )
+        conn.commit()
+    return get_outbox_file(file_id)

@@ -6,7 +6,7 @@ WORKDIR /app
 RUN pip install --no-cache-dir fastapi>=0.115 uvicorn>=0.34 pydantic>=2.0
 
 # Dev dependencies (linting, type checking, testing)
-RUN pip install --no-cache-dir pytest>=8.0 httpx>=0.27 ruff>=0.11 mypy>=1.15
+RUN pip install --no-cache-dir pytest>=8.0 httpx2>=2.0 ruff>=0.11 mypy>=1.15
 
 # Copy and install the package itself
 COPY pyproject.toml ./

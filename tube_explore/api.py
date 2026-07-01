@@ -17,6 +17,7 @@ from tube_explore.models import (
     ConversionPreset,
     ConversionPresetCreate,
     ConversionPresetUpdate,
+    OutboxFileCreate,
     Profile,
     ProfileCreate,
     ProfileUpdate,
@@ -28,11 +29,13 @@ from tube_explore.schemas import (
     ConversionPresetResponse,
     ConversionPresetUpdateRequest,
     DownloadPlaylistRequest,
+    DownloadTaskCreatedResponse,
     DownloadVideoRequest,
     HealthResponse,
     MetadataResponse,
     OkResponse,
     OutboxEntry,
+    OutboxProcessRequest,
     PlaylistEntry,
     PlaylistResponse,
     ProfileCreateRequest,
@@ -51,6 +54,7 @@ async def lifespan(_app: FastAPI):
     global _main_loop
     _main_loop = asyncio.get_running_loop()
     db.init_db()
+    _sync_outbox_db()
     yield
 
 
@@ -251,6 +255,24 @@ def _resolve_output_path(body, profile: Profile) -> str:
 # ── Search / Metadata / Playlist ─────────────────────────────
 
 
+def _sync_outbox_db() -> None:
+    outbox_dir = Path(config.get_outbox_dir())
+    if not outbox_dir.is_dir():
+        return
+    known: set[str] = {r.file_name for r in db.list_outbox_files()}
+    for p in sorted(outbox_dir.iterdir()):
+        if not p.is_file() or p.name in known:
+            continue
+        stat = p.stat()
+        record = OutboxFileCreate(
+            id=str(uuid.uuid4()),
+            file_name=p.name,
+            file_size=stat.st_size,
+            created_at=datetime.fromtimestamp(stat.st_mtime, tz=UTC),
+        )
+        db.insert_outbox_file(record)
+
+
 @app.get("/api/search", response_model=SearchResponse, summary="Search media", description="Search for media content by query string. Returns a ranked list of matching results with ID, title, duration, and channel info.", tags=["Search"])
 def search(q: str = Query(..., description="Search query string"), limit: int = Query(10, ge=1, le=50, description="Maximum number of results (1–50)")):
     try:
@@ -290,7 +312,7 @@ def _make_settings(raw: dict[str, str]) -> SettingsDict:
     )
 
 
-@app.post("/api/download/video", status_code=202, summary="Download video", description="Start a background task to download a single video. Accepts profile name or per-request overrides for quality, format, directory, audio-only mode, and a conversion preset. Returns a task ID for status polling.", tags=["Downloads"])
+@app.post("/api/download/video", response_model=DownloadTaskCreatedResponse, status_code=202, summary="Download video", description="Start a background task to download a single video. Accepts profile name or per-request overrides for quality, format, directory, audio-only mode, and a conversion preset. Returns a task ID for status polling.", tags=["Downloads"])
 def download_video(body: DownloadVideoRequest):
     gs = _make_settings(db.get_all_settings())
     profile = _resolve_profile(body.profile, body)
@@ -299,12 +321,12 @@ def download_video(body: DownloadVideoRequest):
 
     tid = _create_task("video", body.url, body.model_dump(by_alias=True))
     _run_in_background(
-        tid, ytdlp.download_video, body.url, output_dir=out, profile=profile, settings=gs, audio_only=body.audio_only, conversion_preset=conversion_preset
+        tid, ytdlp.download_video, body.url, output_dir=out, profile=profile, settings=gs, audio_only=body.audio_only, conversion_preset=conversion_preset, task_id=tid
     )
-    return {"taskId": tid, "status": "pending"}
+    return DownloadTaskCreatedResponse(task_id=tid, status="pending", status_url=f"/api/tasks/{tid}", stream_url=f"/api/tasks/{tid}/stream")
 
 
-@app.post("/api/download/playlist", status_code=202, summary="Download playlist", description="Start a background task to download all videos in a playlist. Supports optional index range filtering, audio-only mode, and a conversion preset. Returns a task ID for status polling.", tags=["Downloads"])
+@app.post("/api/download/playlist", response_model=DownloadTaskCreatedResponse, status_code=202, summary="Download playlist", description="Start a background task to download all videos in a playlist. Supports optional index range filtering, audio-only mode, and a conversion preset. Returns a task ID for status polling.", tags=["Downloads"])
 def download_playlist(body: DownloadPlaylistRequest):
     gs = _make_settings(db.get_all_settings())
     profile = _resolve_profile(body.profile, body)
@@ -322,8 +344,9 @@ def download_playlist(body: DownloadPlaylistRequest):
         video_range=body.range,
         audio_only=body.audio_only,
         conversion_preset=conversion_preset,
+        task_id=tid,
     )
-    return {"taskId": tid, "status": "pending"}
+    return DownloadTaskCreatedResponse(task_id=tid, status="pending", status_url=f"/api/tasks/{tid}", stream_url=f"/api/tasks/{tid}/stream")
 
 
 # ── Tasks ────────────────────────────────────────────────────
@@ -445,20 +468,29 @@ def health():
 
 
 def _list_outbox() -> list[OutboxEntry]:
+    records = db.list_outbox_files()
     outbox_dir = Path(config.get_outbox_dir())
-    if not outbox_dir.is_dir():
-        return []
     entries: list[OutboxEntry] = []
-    for p in sorted(outbox_dir.iterdir()):
-        if p.is_file():
-            stat = p.stat()
-            entries.append(
-                OutboxEntry(
-                    name=p.name,
-                    size=stat.st_size,
-                    modified_at=datetime.fromtimestamp(stat.st_mtime, tz=UTC),
-                )
+    for r in records:
+        file_path = outbox_dir / r.file_name
+        if not file_path.is_file():
+            continue
+        entries.append(
+            OutboxEntry(
+                id=r.id,
+                name=r.file_name,
+                size=r.file_size,
+                media_url=r.media_url,
+                task_id=r.task_id,
+                quality_mode=r.quality_mode,
+                quality_value=r.quality_value,
+                convert_preset=r.convert_preset,
+                status=r.status,
+                error=r.error,
+                created_at=r.created_at,
+                updated_at=r.updated_at,
             )
+        )
     return entries
 
 
@@ -467,27 +499,39 @@ def list_outbox():
     return _list_outbox()
 
 
-@app.delete("/api/outbox/{file_name}", response_model=OkResponse, summary="Delete outbox file", description="Remove a file from the outbox by name.", tags=["Outbox"])
-def delete_outbox_file(file_name: str):
-    file_path = Path(config.get_outbox_dir()) / file_name
-    if not file_path.exists() or not file_path.is_file():
-        raise HTTPException(404, f"File '{file_name}' not found in outbox")
-    file_path.unlink()
+@app.delete("/api/outbox/{file_id}", response_model=OkResponse, summary="Delete outbox file", description="Remove a file from the outbox by its file ID. Also deletes the file from disk.", tags=["Outbox"])
+def delete_outbox_file(file_id: str):
+    record = db.get_outbox_file(file_id)
+    if not record:
+        raise HTTPException(404, f"Outbox file '{file_id}' not found")
+    file_path = Path(config.get_outbox_dir()) / record.file_name
+    if file_path.is_file():
+        file_path.unlink()
+    db.delete_outbox_file(file_id)
     return OkResponse()
 
 
-@app.post("/api/outbox/{file_name}/process", response_model=OkResponse, summary="Retry conversion on outbox file", description="Attempt to convert an outbox file again using the specified conversion preset. Requires ffmpeg. On success the converted file replaces the original in the outbox.", tags=["Outbox"])
-def process_outbox_file(file_name: str, preset: str = Query(..., description="Name of the conversion preset to apply")):
-    outbox_dir = Path(config.get_outbox_dir())
-    file_path = outbox_dir / file_name
-    if not file_path.exists() or not file_path.is_file():
-        raise HTTPException(404, f"File '{file_name}' not found in outbox")
+@app.post("/api/outbox/{file_id}/process", response_model=OkResponse, summary="Retry conversion on outbox file", description="Attempt to convert an outbox file again using the specified conversion preset. Requires ffmpeg. On success the converted file replaces the original in the outbox.", tags=["Outbox"])
+def process_outbox_file(file_id: str, body: OutboxProcessRequest):
+    record = db.get_outbox_file(file_id)
+    if not record:
+        raise HTTPException(404, f"Outbox file '{file_id}' not found")
 
-    cp = db.get_preset_by_name(preset)
+    outbox_dir = Path(config.get_outbox_dir())
+    file_path = outbox_dir / record.file_name
+    if not file_path.is_file():
+        db.update_outbox_file_status(file_id, "failed", error="File not found on disk")
+        raise HTTPException(404, f"File '{record.file_name}' not found on disk")
+
+    db.update_outbox_file_status(file_id, "processing")
+
+    cp = db.get_preset_by_name(body.preset)
     if not cp:
-        raise HTTPException(404, f"Conversion preset '{preset}' not found")
+        db.update_outbox_file_status(file_id, "failed", error=f"Conversion preset '{body.preset}' not found")
+        raise HTTPException(404, f"Conversion preset '{body.preset}' not found")
 
     if not ytdlp.HAS_FFMPEG:
+        db.update_outbox_file_status(file_id, "failed", error="ffmpeg is not available")
         raise HTTPException(400, "ffmpeg is not available; cannot retry conversion")
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -495,15 +539,34 @@ def process_outbox_file(file_name: str, preset: str = Query(..., description="Na
         try:
             converted = ytdlp._run_conversion(tmpdir, cp)
         except RuntimeError as e:
+            db.update_outbox_file_status(file_id, "failed", error=str(e))
             raise HTTPException(422, str(e)) from e
 
     if not converted:
-        raise HTTPException(422, "Conversion produced no output file")
+        err = "Conversion produced no output file"
+        db.update_outbox_file_status(file_id, "failed", error=err)
+        raise HTTPException(422, err)
 
     output_name = f"{file_path.stem}.{cp.output_ext}"
     output_path = outbox_dir / output_name
     shutil.move(converted, str(output_path))
     file_path.unlink()
+
+    db.update_outbox_file_status(file_id, "completed")
+    db.insert_outbox_file(
+        OutboxFileCreate(
+            id=str(uuid.uuid4()),
+            file_name=output_name,
+            file_size=output_path.stat().st_size,
+            media_url=record.media_url,
+            task_id=record.task_id,
+            quality_mode=record.quality_mode,
+            quality_value=record.quality_value,
+            convert_preset=body.preset,
+            status="completed",
+            created_at=datetime.now(UTC),
+        )
+    )
 
     return OkResponse()
 

@@ -138,6 +138,15 @@ class DownloadPlaylistRequest(BaseModel):
     subtitle_langs: str | None = None
 
 
+class DownloadTaskCreatedResponse(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    task_id: str = Field(..., description="Task ID for status polling")
+    status: str = Field("pending", description="Initial task status")
+    status_url: str = Field(..., description="URL to poll task status")
+    stream_url: str = Field(..., description="URL to stream task status updates via SSE")
+
+
 # ── Task ──────────────────────────────────────────────────────
 
 
@@ -259,9 +268,24 @@ class HealthResponse(BaseModel):
 class OutboxEntry(BaseModel):
     model_config = _CAMEL_CONFIG
 
+    id: str = Field(..., description="Unique file identifier")
     name: str = Field(..., description="File name")
     size: int = Field(..., description="File size in bytes")
-    modified_at: datetime = Field(..., description="Last modified timestamp")
+    media_url: str | None = Field(None, description="Source media URL")
+    task_id: str | None = Field(None, description="Download task ID")
+    quality_mode: str | None = Field(None, description="Quality mode used for download")
+    quality_value: int | None = Field(None, description="Quality value used for download")
+    convert_preset: str | None = Field(None, description="Conversion preset attempted")
+    status: str = Field("pending", description="Processing status (pending, processing, completed, failed)")
+    error: str | None = Field(None, description="Error message if processing failed")
+    created_at: datetime = Field(..., description="When the file was added to outbox")
+    updated_at: datetime | None = Field(None, description="When the record was last updated")
+
+
+class OutboxProcessRequest(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    preset: str = Field(..., description="Conversion preset name to apply")
 
 
 # ── Generic ───────────────────────────────────────────────────

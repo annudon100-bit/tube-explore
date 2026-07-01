@@ -161,3 +161,32 @@ class TaskInfo(BaseModel):
     created_at: datetime
     updated_at: datetime | None = None
     error: str | None = None
+
+
+class OutboxFile(BaseModel):
+    id: str
+    file_name: str
+    file_size: int
+    media_url: str | None = None
+    task_id: str | None = None
+    quality_mode: str | None = None
+    quality_value: int | None = None
+    convert_preset: str | None = None
+    status: str = "pending"
+    error: str | None = None
+    created_at: datetime
+    updated_at: datetime | None = None
+
+
+class OutboxFileCreate(BaseModel):
+    id: str
+    file_name: str
+    file_size: int
+    media_url: str | None = None
+    task_id: str | None = None
+    quality_mode: str | None = None
+    quality_value: int | None = None
+    convert_preset: str | None = None
+    status: str = "pending"
+    error: str | None = None
+    created_at: datetime

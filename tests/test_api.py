@@ -1,10 +1,12 @@
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 
-from tube_explore import config
+from tube_explore import config, db
 from tube_explore.api import _create_task, _lock, _sub_lock, _subscribe, _subscribers, _tasks, _unsubscribe, app
+from tube_explore.models import OutboxFileCreate
 
 client = TestClient(app)
 
@@ -190,10 +192,25 @@ def test_list_outbox_empty():
     assert resp.json() == []
 
 
-def test_list_outbox_with_files(tmp_path):
+def _make_outbox_record(tmp_path, name: str, status: str = "pending") -> str:
+    from datetime import UTC, datetime
     outbox = Path(config.get_outbox_dir())
-    (outbox / "video.mp4").write_text("dummy")
-    (outbox / "audio.webm").write_text("dummy")
+    (outbox / name).write_text("dummy")
+    rec = db.insert_outbox_file(
+        OutboxFileCreate(
+            id=str(uuid4()),
+            file_name=name,
+            file_size=(outbox / name).stat().st_size,
+            status=status,
+            created_at=datetime.now(UTC),
+        )
+    )
+    return rec.id
+
+
+def test_list_outbox_with_files(tmp_path):
+    fid1 = _make_outbox_record(tmp_path, "video.mp4")
+    fid2 = _make_outbox_record(tmp_path, "audio.webm")
     try:
         resp = client.get("/api/outbox")
         assert resp.status_code == 200
@@ -202,31 +219,44 @@ def test_list_outbox_with_files(tmp_path):
         assert names == {"video.mp4", "audio.webm"}
         for e in data:
             assert "size" in e
-            assert "modifiedAt" in e
+            assert "id" in e
     finally:
+        outbox = Path(config.get_outbox_dir())
         (outbox / "video.mp4").unlink(missing_ok=True)
         (outbox / "audio.webm").unlink(missing_ok=True)
+        db.delete_outbox_file(fid1)
+        db.delete_outbox_file(fid2)
 
 
 def test_delete_outbox_file():
+    from datetime import UTC, datetime
     outbox = Path(config.get_outbox_dir())
     (outbox / "delete_me.mp4").write_text("to be deleted")
+    rec = db.insert_outbox_file(
+        OutboxFileCreate(
+            id=str(uuid4()),
+            file_name="delete_me.mp4",
+            file_size=(outbox / "delete_me.mp4").stat().st_size,
+            created_at=datetime.now(UTC),
+        )
+    )
     try:
-        resp = client.delete("/api/outbox/delete_me.mp4")
+        resp = client.delete(f"/api/outbox/{rec.id}")
         assert resp.status_code == 200
         assert resp.json()["ok"] is True
         assert not (outbox / "delete_me.mp4").exists()
     finally:
         (outbox / "delete_me.mp4").unlink(missing_ok=True)
+        db.delete_outbox_file(rec.id)
 
 
 def test_delete_nonexistent_outbox_file():
-    resp = client.delete("/api/outbox/nonexistent.mkv")
+    resp = client.delete("/api/outbox/00000000-0000-0000-0000-000000000000")
     assert resp.status_code == 404
 
 
 def test_process_outbox_file_nonexistent():
-    resp = client.post("/api/outbox/nope.mp4/process?preset=MP4+1080p")
+    resp = client.post("/api/outbox/00000000-0000-0000-0000-000000000000/process", json={"preset": "MP4 1080p"})
     assert resp.status_code == 404
 
 
@@ -234,23 +264,43 @@ def test_process_outbox_file_no_ffmpeg():
     from tube_explore.ytdlp import HAS_FFMPEG
     if HAS_FFMPEG:
         pytest.skip("ffmpeg is available, cannot test no-ffmpeg branch")
+    from datetime import UTC, datetime
     outbox = Path(config.get_outbox_dir())
     (outbox / "noffmpeg.mp4").write_text("dummy")
+    rec = db.insert_outbox_file(
+        OutboxFileCreate(
+            id=str(uuid4()),
+            file_name="noffmpeg.mp4",
+            file_size=(outbox / "noffmpeg.mp4").stat().st_size,
+            created_at=datetime.now(UTC),
+        )
+    )
     try:
-        resp = client.post("/api/outbox/noffmpeg.mp4/process?preset=MP4+1080p")
+        resp = client.post(f"/api/outbox/{rec.id}/process", json={"preset": "MP4 1080p"})
         assert resp.status_code == 400
     finally:
         (outbox / "noffmpeg.mp4").unlink(missing_ok=True)
+        db.delete_outbox_file(rec.id)
 
 
 def test_process_outbox_file_nonexistent_preset():
+    from datetime import UTC, datetime
     outbox = Path(config.get_outbox_dir())
     (outbox / "some_file.mp4").write_text("dummy")
+    rec = db.insert_outbox_file(
+        OutboxFileCreate(
+            id=str(uuid4()),
+            file_name="some_file.mp4",
+            file_size=(outbox / "some_file.mp4").stat().st_size,
+            created_at=datetime.now(UTC),
+        )
+    )
     try:
-        resp = client.post("/api/outbox/some_file.mp4/process?preset=NONEXISTENT")
+        resp = client.post(f"/api/outbox/{rec.id}/process", json={"preset": "NONEXISTENT"})
         assert resp.status_code == 404
     finally:
         (outbox / "some_file.mp4").unlink(missing_ok=True)
+        db.delete_outbox_file(rec.id)
 
 
 # ── Conversion Presets ────────────────────────────────────────

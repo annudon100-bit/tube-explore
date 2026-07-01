@@ -4,11 +4,12 @@ import shutil
 import subprocess
 import urllib.error
 import urllib.request
+import uuid
 from contextlib import suppress
 from datetime import datetime
 from typing import Any
 
-from tube_explore import config
+from tube_explore import config, db
 from tube_explore.models import ConversionPreset, Profile, QualityMode, SettingsDict
 
 YTDLP_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
@@ -250,6 +251,39 @@ def _resolve_dir(
     return os.getcwd()
 
 
+def _record_outbox_files(
+    filenames: list[str],
+    outbox_dir: str,
+    media_url: str | None = None,
+    task_id: str | None = None,
+    quality_mode: str | None = None,
+    quality_value: int | None = None,
+    convert_preset: str | None = None,
+) -> None:
+    from datetime import UTC, datetime
+
+    from tube_explore.models import OutboxFileCreate
+
+    now = datetime.now(UTC)
+    for name in filenames:
+        fpath = os.path.join(outbox_dir, name)
+        if not os.path.isfile(fpath):
+            continue
+        fsize = os.path.getsize(fpath)
+        record = OutboxFileCreate(
+            id=str(uuid.uuid4()),
+            file_name=name,
+            file_size=fsize,
+            media_url=media_url,
+            task_id=task_id,
+            quality_mode=quality_mode,
+            quality_value=quality_value,
+            convert_preset=convert_preset,
+            created_at=now,
+        )
+        db.insert_outbox_file(record)
+
+
 # ── Download ──────────────────────────────────────────────────
 
 
@@ -262,6 +296,7 @@ def _download_with_profile(
     video_range: str | None = None,
     audio_only: bool = False,
     conversion_preset: ConversionPreset | None = None,
+    task_id: str | None = None,
 ) -> dict[str, Any]:
     temp_dir = settings.temp_directory.strip()
     final_dir = output_dir
@@ -295,13 +330,31 @@ def _download_with_profile(
             if converted:
                 result["converted"] = converted
         except RuntimeError:
-            _route_to_outbox(dl_dir, outbox_dir)
+            outbox_files = _route_to_outbox(dl_dir, outbox_dir)
             result["outbox"] = outbox_dir
+            _record_outbox_files(
+                outbox_files,
+                outbox_dir,
+                media_url=url,
+                task_id=task_id,
+                quality_mode=profile.download_quality_mode.value,
+                quality_value=profile.download_quality_value,
+                convert_preset=conversion_preset.name if conversion_preset else None,
+            )
             return result
 
     if not HAS_FFMPEG and not audio_only:
-        _route_to_outbox(dl_dir, outbox_dir)
+        outbox_files = _route_to_outbox(dl_dir, outbox_dir)
         result["outbox"] = outbox_dir
+        _record_outbox_files(
+            outbox_files,
+            outbox_dir,
+            media_url=url,
+            task_id=task_id,
+            quality_mode=profile.download_quality_mode.value,
+            quality_value=profile.download_quality_value,
+            convert_preset=conversion_preset.name if conversion_preset else None,
+        )
         return result
 
     if dl_dir != final_dir:
@@ -311,8 +364,9 @@ def _download_with_profile(
     return result
 
 
-def _route_to_outbox(src: str, outbox_dir: str) -> None:
+def _route_to_outbox(src: str, outbox_dir: str) -> list[str]:
     os.makedirs(outbox_dir, exist_ok=True)
+    moved: list[str] = []
     for entry in os.listdir(src):
         s = os.path.join(src, entry)
         d = os.path.join(outbox_dir, entry)
@@ -322,8 +376,10 @@ def _route_to_outbox(src: str, outbox_dir: str) -> None:
                 shutil.rmtree(s)
             else:
                 shutil.move(s, d)
+            moved.append(entry)
         except OSError:
             pass
+    return moved
 
 
 def _move_downloads(src: str, dst: str) -> None:
@@ -430,6 +486,7 @@ def download_video(
     settings: SettingsDict | None = None,
     audio_only: bool = False,
     conversion_preset: ConversionPreset | None = None,
+    task_id: str | None = None,
 ) -> dict[str, Any]:
     if profile is None:
         profile = Profile(id=0, name="_adhoc", created_at=datetime.now(), updated_at=datetime.now())
@@ -437,7 +494,7 @@ def download_video(
         settings = SettingsDict()
 
     out = _resolve_dir(profile.download_directory, output_dir)
-    return _download_with_profile(url, out, profile, settings, is_playlist=False, audio_only=audio_only, conversion_preset=conversion_preset)
+    return _download_with_profile(url, out, profile, settings, is_playlist=False, audio_only=audio_only, conversion_preset=conversion_preset, task_id=task_id)
 
 
 def download_playlist(
@@ -448,6 +505,7 @@ def download_playlist(
     video_range: str | None = None,
     audio_only: bool = False,
     conversion_preset: ConversionPreset | None = None,
+    task_id: str | None = None,
 ) -> dict[str, Any]:
     if profile is None:
         profile = Profile(id=0, name="_adhoc", created_at=datetime.now(), updated_at=datetime.now())
@@ -456,5 +514,5 @@ def download_playlist(
 
     out = _resolve_dir(profile.download_directory, output_dir)
     return _download_with_profile(
-        url, out, profile, settings, is_playlist=True, video_range=video_range, audio_only=audio_only, conversion_preset=conversion_preset
+        url, out, profile, settings, is_playlist=True, video_range=video_range, audio_only=audio_only, conversion_preset=conversion_preset, task_id=task_id
     )
