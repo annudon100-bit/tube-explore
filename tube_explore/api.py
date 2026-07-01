@@ -508,7 +508,7 @@ def get_profile(profile_id: int):
     return p
 
 
-@app.put("/api/profiles/{profile_id}", response_model=ProfileResponse, responses=_404, summary="Update profile", description="Update an existing download profile. Only provided fields are changed; omitted fields keep their current values.", tags=["Profiles"])
+@app.patch("/api/profiles/{profile_id}", response_model=ProfileResponse, responses=_404, summary="Update profile", description="Patch an existing download profile. Only provided fields are changed; omitted fields keep their current values.", tags=["Profiles"])
 def update_profile(profile_id: int, body: ProfileUpdateRequest):
     existing = db.get_profile(profile_id)
     if not existing:
@@ -538,7 +538,7 @@ def get_settings():
     return SettingsResponse(**raw)
 
 
-@app.put("/api/settings", response_model=SettingsResponse, summary="Update settings", description="Update global download settings. Only provided fields are changed; omitted fields keep their current values.", tags=["Settings"])
+@app.patch("/api/settings", response_model=SettingsResponse, summary="Update settings", description="Patch global download settings. Only provided fields are changed; omitted fields keep their current values.", tags=["Settings"])
 def update_settings(body: SettingsUpdateRequest):
     data = {k: str(v) for k, v in body.model_dump(exclude_none=True).items()}
     if data:
@@ -686,7 +686,7 @@ def get_convert_preset(preset_name: str):
     return p
 
 
-@app.put("/api/convert-presets/{preset_name}", response_model=ConversionPresetResponse, responses=_404, summary="Update conversion preset", description="Update an existing conversion preset. Only provided fields are changed.", tags=["Conversion Presets"])
+@app.patch("/api/convert-presets/{preset_name}", response_model=ConversionPresetResponse, responses=_404, summary="Update conversion preset", description="Patch an existing conversion preset. Only provided fields are changed.", tags=["Conversion Presets"])
 def update_convert_preset(preset_name: str, body: ConversionPresetUpdateRequest):
     existing = db.get_preset_by_name(preset_name)
     if not existing:

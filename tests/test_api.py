@@ -76,13 +76,13 @@ def test_get_nonexistent_profile():
 
 def test_update_profile():
     create = client.post("/api/profiles", json={"name": "upd"}).json()
-    resp = client.put(f"/api/profiles/{create['id']}", json={"label": "Updated"})
+    resp = client.patch(f"/api/profiles/{create['id']}", json={"label": "Updated"})
     assert resp.status_code == 200
     assert resp.json()["label"] == "Updated"
 
 
 def test_update_nonexistent_profile():
-    resp = client.put("/api/profiles/9999", json={"label": "x"})
+    resp = client.patch("/api/profiles/9999", json={"label": "x"})
     assert resp.status_code == 404
 
 
@@ -115,7 +115,7 @@ def test_get_settings():
 
 
 def test_update_settings():
-    resp = client.put("/api/settings", json={"rateLimit": "5M", "socketTimeout": 60})
+    resp = client.patch("/api/settings", json={"rateLimit": "5M", "socketTimeout": 60})
     assert resp.status_code == 200
     data = resp.json()
     assert data["rateLimit"] == "5M"
@@ -123,7 +123,7 @@ def test_update_settings():
 
 
 def test_update_settings_empty():
-    resp = client.put("/api/settings", json={})
+    resp = client.patch("/api/settings", json={})
     assert resp.status_code == 200
 
 
@@ -363,7 +363,7 @@ def test_update_convert_preset():
         "/api/convert-presets",
         json={"name": "UpdPreset", "container": "mp4", "outputExt": "mp4"},
     )
-    resp = client.put(
+    resp = client.patch(
         "/api/convert-presets/UpdPreset",
         json={"label": "Updated label", "maxHeight": 720},
     )
@@ -374,7 +374,7 @@ def test_update_convert_preset():
 
 
 def test_update_nonexistent_convert_preset():
-    resp = client.put(
+    resp = client.patch(
         "/api/convert-presets/nonexistent",
         json={"label": "x"},
     )
