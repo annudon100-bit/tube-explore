@@ -36,10 +36,15 @@ def test_ready():
 # ── Profiles ──────────────────────────────────────────────────
 
 
-def test_list_profiles_empty():
+SEED_PROFILE_NAMES = {"best-video", "1080p", "720p", "4k", "audio-best", "audio-mp3", "smallest"}
+
+
+def test_list_profiles_seeded():
     resp = client.get("/api/profiles")
     assert resp.status_code == 200
-    assert resp.json() == []
+    data = resp.json()
+    names = {p["name"] for p in data}
+    assert names == SEED_PROFILE_NAMES
 
 
 def test_create_profile():

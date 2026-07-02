@@ -4,7 +4,7 @@ build:
 	docker compose build
 
 test:
-	docker compose run --rm tube-explore python -m pytest tests/ -v
+	docker compose run --rm -v $(PWD):/app tube-explore python -m pytest tests/ -v
 
 shell:
 	docker compose run --rm tube-explore bash

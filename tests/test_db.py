@@ -11,8 +11,13 @@ def test_init_db_creates_tables():
     assert "socket_timeout" in s
 
 
-def test_list_profiles_empty():
-    assert db.list_profiles() == []
+SEED_PROFILE_NAMES = {"best-video", "1080p", "720p", "4k", "audio-best", "audio-mp3", "smallest"}
+
+
+def test_list_profiles_seeded():
+    profiles = db.list_profiles()
+    names = {p.name for p in profiles}
+    assert names == SEED_PROFILE_NAMES
 
 
 def test_create_and_get_profile():
@@ -88,8 +93,9 @@ def test_list_profiles():
     for name in ["a", "b", "c"]:
         db.create_profile(ProfileCreate(name=name))
     profiles = db.list_profiles()
-    names = [p.name for p in profiles]
-    assert names == ["a", "b", "c"]
+    names = {p.name for p in profiles}
+    assert names >= {"a", "b", "c"}
+    assert "best-video" in names
 
 
 def test_create_duplicate_name_raises():

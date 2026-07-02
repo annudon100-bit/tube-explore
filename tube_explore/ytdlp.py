@@ -77,7 +77,7 @@ def _run(args: list[str], timeout: int = 120, capture: bool = True) -> str | Non
             raise RuntimeError(err)
         return result.stdout
     else:
-        ret = subprocess.run(cmd, timeout=timeout)
+        ret = subprocess.run(cmd)
         if ret.returncode != 0:
             logger.warning("yt-dlp exited with code %d during download", ret.returncode)
         return None
