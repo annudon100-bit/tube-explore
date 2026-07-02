@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -24,6 +24,11 @@ def _validate_quality_mode(mode: QualityMode | None, value: int | None) -> None:
         raise ValueError(f"Quality value is required when mode is '{mode}'")
 
 
+# URL validation pattern and format marker for OpenAPI spec
+_URL_FORMAT: Any = {"format": "uri"}
+_URL_PATTERN = r"^https?://\S+"
+
+
 # ── Search ────────────────────────────────────────────────────
 
 
@@ -32,10 +37,10 @@ class SearchResult(BaseModel):
 
     id: str = Field(..., description="Media video ID")
     title: str | None = None
-    url: str = Field(..., description="Full watch URL")
+    url: str = Field(..., json_schema_extra=_URL_FORMAT, description="Full watch URL")
     duration: int | None = None
     channel: str | None = None
-    channel_url: str | None = Field(None, validation_alias="channelUrl")
+    channel_url: str | None = Field(None, validation_alias="channelUrl", json_schema_extra=_URL_FORMAT)
     thumbnail: str | None = None
 
 
@@ -70,10 +75,10 @@ class MetadataResponse(BaseModel):
 
     id: str
     title: str | None = None
-    url: str
+    url: str = Field(..., json_schema_extra=_URL_FORMAT)
     duration: int | None = None
     channel: str | None = None
-    channel_url: str | None = Field(None, validation_alias="channelUrl")
+    channel_url: str | None = Field(None, validation_alias="channelUrl", json_schema_extra=_URL_FORMAT)
     thumbnail: str | None = None
     description: str | None = None
     view_count: int | None = Field(None, validation_alias="viewCount")
@@ -87,7 +92,7 @@ class PlaylistEntry(BaseModel):
 
     id: str
     title: str | None = None
-    url: str
+    url: str = Field(..., json_schema_extra=_URL_FORMAT)
     duration: int | None = None
     channel: str | None = None
 
@@ -95,7 +100,7 @@ class PlaylistEntry(BaseModel):
 class PlaylistResponse(BaseModel):
     model_config = _CAMEL_CONFIG
 
-    url: str
+    url: str = Field(..., json_schema_extra=_URL_FORMAT)
     count: int
     total_duration: int = Field(0, validation_alias="totalDuration")
     entries: list[PlaylistEntry]
@@ -107,7 +112,7 @@ class PlaylistResponse(BaseModel):
 class DownloadVideoRequest(BaseModel):
     model_config = _CAMEL_CONFIG
 
-    url: str = Field(..., description="Media video URL")
+    url: str = Field(..., pattern=_URL_PATTERN, json_schema_extra=_URL_FORMAT, description="Media video URL")
     output_dir: str | None = Field(None, description="Relative subdirectory appended to the profile's download directory")
     download_path_override: str | None = Field(None, alias="downloadPathOverride", description="Absolute path override for the final output destination. Ignores profile's download_directory.")
     profile_id: str | None = Field(None, alias="profileId", description="Name of an existing profile to use")
@@ -132,7 +137,7 @@ class DownloadVideoRequest(BaseModel):
 class DownloadPlaylistRequest(BaseModel):
     model_config = _CAMEL_CONFIG
 
-    url: str = Field(..., description="Media playlist URL")
+    url: str = Field(..., pattern=_URL_PATTERN, json_schema_extra=_URL_FORMAT, description="Media playlist URL")
     output_dir: str | None = Field(None, description="Relative subdirectory appended to the profile's download directory")
     download_path_override: str | None = Field(None, alias="downloadPathOverride", description="Absolute path override for the final output destination. Ignores profile's download_directory.")
     profile_id: str | None = Field(None, alias="profileId", description="Name of an existing profile to use")
@@ -180,7 +185,7 @@ class FileInfo(DownloadedFile):
     model_config = _CAMEL_CONFIG
 
     task_id: str = Field(..., description="ID of the download task that produced this file")
-    source_url: str | None = Field(None, description="Source media URL")
+    source_url: str | None = Field(None, description="Source media URL", json_schema_extra=_URL_FORMAT)
     created_at: datetime = Field(..., description="When the file was downloaded")
 
 
@@ -337,7 +342,7 @@ class OutboxEntry(BaseModel):
     id: str = Field(..., description="Unique file identifier")
     name: str = Field(..., description="File name")
     size: int = Field(..., description="File size in bytes")
-    media_url: str | None = Field(None, description="Source media URL")
+    media_url: str | None = Field(None, description="Source media URL", json_schema_extra=_URL_FORMAT)
     task_id: str | None = Field(None, description="Download task ID")
     quality_mode: str | None = Field(None, description="Quality mode used for download")
     quality_value: int | None = Field(None, description="Quality value used for download")
