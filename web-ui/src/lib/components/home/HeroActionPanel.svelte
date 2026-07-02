@@ -9,49 +9,61 @@
   type Mode = 'search' | 'media' | 'playlist';
   let mode: Mode = 'search';
   let value = '';
-  let limit = 10;
 
   $: placeholder = mode === 'search'
     ? 'Search for videos, channels, or anything...'
     : mode === 'media'
-      ? 'Paste a media URL...'
+      ? 'Paste a video URL...'
       : 'Paste a playlist URL...';
+
+  $: buttonLabel = mode === 'search' ? 'Search' : 'Inspect';
+
+  function handlePrimary() {
+    if (!value.trim()) return;
+    if (mode === 'search') onSearch(value, 10);
+    else if (mode === 'media') onInspectMetadata(value);
+    else onInspectPlaylist(value);
+  }
+
+  function handleEnter(e: KeyboardEvent) {
+    if (e.key === 'Enter') handlePrimary();
+  }
+
+  function handleDownload() {
+    if (!value.trim()) return;
+    if (mode === 'playlist') onDownloadPlaylist(value);
+    else onDownloadVideo(value);
+  }
 </script>
 
-<section class="panel hero-panel">
-  <div class="mode-tabs">
-    <button class="mode-tab {mode === 'search' ? 'active' : ''}" type="button" on:click={() => mode = 'search'}>⌕ Search</button>
-    <button class="mode-tab {mode === 'media' ? 'active' : ''}" type="button" on:click={() => mode = 'media'}>🔗 Media URL</button>
-    <button class="mode-tab {mode === 'playlist' ? 'active' : ''}" type="button" on:click={() => mode = 'playlist'}>☷ Playlist URL</button>
+<section class="search-card" aria-label="Search and download">
+  <div class="tabs" role="tablist">
+    <button class="tab {mode === 'search' ? 'active' : ''}" type="button" on:click={() => mode = 'search'}>
+      <svg width="21" height="21"><use href="#i-search"/></svg>
+      Search
+    </button>
+    <button class="tab {mode === 'media' ? 'active' : ''}" type="button" on:click={() => mode = 'media'}>
+      <svg width="21" height="21"><use href="#i-link"/></svg>
+      Video URL
+    </button>
+    <button class="tab {mode === 'playlist' ? 'active' : ''}" type="button" on:click={() => mode = 'playlist'}>
+      <svg width="21" height="21"><use href="#i-list"/></svg>
+      Playlist URL
+    </button>
   </div>
 
-  <div class="input-row">
-    <input class="input" bind:value placeholder={placeholder} on:keydown={(e) => { if (e.key === 'Enter') { mode === 'search' ? onSearch(value, limit) : mode === 'media' ? onInspectMetadata(value) : onInspectPlaylist(value); } }} />
-    {#if mode === 'search'}
-      <select class="select" bind:value={limit}>
-        <option value={5}>5</option>
-        <option value={10}>10</option>
-        <option value={25}>25</option>
-        <option value={50}>50</option>
-      </select>
-      <button class="btn primary" disabled={busy || !value.trim()} type="button" on:click={() => onSearch(value, limit)}>Search</button>
-    {:else if mode === 'media'}
-      <span></span>
-      <button class="btn primary" disabled={busy || !value.trim()} type="button" on:click={() => onInspectMetadata(value)}>Inspect</button>
-    {:else}
-      <span></span>
-      <button class="btn primary" disabled={busy || !value.trim()} type="button" on:click={() => onInspectPlaylist(value)}>Inspect</button>
-    {/if}
+  <div class="search-row">
+    <label class="input-wrap">
+      <svg width="24" height="24"><use href="#i-search"/></svg>
+      <input type="text" bind:value placeholder={placeholder} aria-label={buttonLabel} on:keydown={handleEnter} disabled={busy} />
+    </label>
+    <button class="primary-btn" type="button" disabled={busy || !value.trim()} on:click={handlePrimary}>{buttonLabel}</button>
   </div>
 
-  <div class="action-row">
-    {#if mode !== 'playlist'}
-      <button class="btn blue" disabled={busy || !value.trim()} type="button" on:click={() => onInspectMetadata(value)}>ⓘ Inspect Metadata</button>
-      <button class="btn red" disabled={busy || !value.trim()} type="button" on:click={() => onDownloadVideo(value)}>⇩ Download Video</button>
-    {/if}
-    {#if mode !== 'media'}
-      <button class="btn green" disabled={busy || !value.trim()} type="button" on:click={() => onInspectPlaylist(value)}>♫ Inspect Playlist</button>
-      <button class="btn" disabled={busy || !value.trim()} type="button" on:click={() => onDownloadPlaylist(value)}>⇩ Download Playlist</button>
-    {/if}
-  </div>
+  <div class="divider">or</div>
+
+  <button class="download-btn" type="button" disabled={busy || !value.trim()} on:click={handleDownload}>
+    <svg width="23" height="23"><use href="#i-download"/></svg>
+    Download {mode === 'playlist' ? 'Playlist' : 'Video'}
+  </button>
 </section>

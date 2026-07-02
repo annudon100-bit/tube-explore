@@ -8,12 +8,16 @@
   export let onNewDownload: () => void = () => {};
   export let onTask: (task: TaskResponse) => void = () => {};
   export let onViewAll: () => void = () => {};
+
+  let collapsed = true;
+
+  function toggleSidebar() { collapsed = !collapsed; }
 </script>
 
-<div class="app-shell">
-  <Sidebar {health} {onOpen} />
+<div class="app-shell" class:sidebar-open={!collapsed}>
+  <Sidebar {health} {onOpen} {collapsed} onToggle={toggleSidebar} />
   <main class="main">
-    <TopBar {onNewDownload} {onTask} {onViewAll} />
+    <TopBar {health} {onTask} {onViewAll} onHealth={() => onOpen('health')} />
     <slot />
   </main>
 </div>

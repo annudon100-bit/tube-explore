@@ -3,6 +3,7 @@
   import AppShell from '$lib/components/layout/AppShell.svelte';
   import HeroActionPanel from '$lib/components/home/HeroActionPanel.svelte';
   import QuickManageCards from '$lib/components/home/QuickManageCards.svelte';
+  import Icons from '$lib/components/layout/Icons.svelte';
   import ToastHost from '$lib/components/shared/ToastHost.svelte';
   import ModalFrame from '$lib/components/shared/ModalFrame.svelte';
   import ErrorMessage from '$lib/components/shared/ErrorMessage.svelte';
@@ -65,44 +66,36 @@
   onMount(refreshChrome);
 </script>
 
+<Icons />
+
 <AppShell {health} onOpen={openDialog} onNewDownload={() => openDownloadVideo('')} onTask={handleTask} onViewAll={handleViewAll}>
-  <HeroActionPanel
-    {busy}
-    onSearch={(q, limit) => run(() => searchMedia(q, limit), (data) => { searchResult = data; dialog = 'searchResults'; })}
-    onInspectMetadata={(url) => run(() => getMetadata(url), (data) => { metadata = data; dialog = 'metadata'; })}
-    onInspectPlaylist={(url) => run(() => getPlaylist(url), (data) => { playlist = data; dialog = 'playlist'; })}
-    onDownloadVideo={openDownloadVideo}
-    onDownloadPlaylist={openDownloadPlaylist}
-  />
+  <section class="hero">
+    <div class="logo-lockup">
+      <svg class="logo-mark" viewBox="0 0 120 120" aria-hidden="true">
+        <use href="#logo-symbol"></use>
+      </svg>
+      <h1 class="wordmark">Tube <span>Explore</span></h1>
+    </div>
 
-  <ErrorMessage message={error} />
+    <HeroActionPanel
+      {busy}
+      onSearch={(q, limit) => run(() => searchMedia(q, limit), (data) => { searchResult = data; dialog = 'searchResults'; })}
+      onInspectMetadata={(url) => run(() => getMetadata(url), (data) => { metadata = data; dialog = 'metadata'; })}
+      onInspectPlaylist={(url) => run(() => getPlaylist(url), (data) => { playlist = data; dialog = 'playlist'; })}
+      onDownloadVideo={openDownloadVideo}
+      onDownloadPlaylist={openDownloadPlaylist}
+    />
 
-  <div class="grid main-grid">
-    <section class="panel card">
-      <div class="card-header"><h2>Quick actions</h2></div>
-      <div class="simple-list">
-        <button class="row clickable" on:click={() => openDownloadVideo('')}><div class="avatar">⇩</div><div><div class="row-title">New video download</div><div class="row-sub">Use a profile or override options.</div></div><strong>→</strong></button>
-        <button class="row clickable" on:click={() => openDownloadPlaylist('')}><div class="avatar">♫</div><div><div class="row-title">New playlist download</div><div class="row-sub">Optionally select a range.</div></div><strong>→</strong></button>
-        <button class="row clickable" on:click={() => dialog = 'files'}><div class="avatar">▣</div><div><div class="row-title">Downloaded files</div><div class="row-sub">Browse completed downloads.</div></div><strong>→</strong></button>
-      </div>
-    </section>
-    <section class="panel card">
-      <div class="card-header"><h2>Use it your way</h2></div>
-      <div class="simple-list">
-        <button class="row clickable" on:click={() => dialog = 'profiles'}><div class="avatar">♙</div><div><div class="row-title">Manage profiles</div><div class="row-sub">Create and edit download profiles.</div></div><strong>→</strong></button>
-        <button class="row clickable" on:click={() => dialog = 'presets'}><div class="avatar">⚙</div><div><div class="row-title">Manage presets</div><div class="row-sub">Customize conversion presets.</div></div><strong>→</strong></button>
-        <button class="row clickable" on:click={() => dialog = 'settings'}><div class="avatar">◌</div><div><div class="row-title">Settings</div><div class="row-sub">Configure application settings.</div></div><strong>→</strong></button>
-      </div>
-    </section>
-  </div>
+    <ErrorMessage message={error} />
 
-  <QuickManageCards onOpen={openDialog} />
+    <QuickManageCards onOpen={openDialog} />
+  </section>
 </AppShell>
 
 <ToastHost />
 
 {#if dialog === 'searchResults' && searchResult}
-  <ModalFrame title={`Search results for “${searchResult.query}”`} size="large" onClose={() => dialog = null}>
+  <ModalFrame title={`Search results for "${searchResult.query}"`} size="large" onClose={() => dialog = null}>
     <SearchResults data={searchResult} onInspect={(url) => run(() => getMetadata(url), (data) => { metadata = data; dialog = 'metadata'; })} onDownload={openDownloadVideo} />
   </ModalFrame>
 {/if}
