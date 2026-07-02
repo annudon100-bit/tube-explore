@@ -143,56 +143,13 @@ If kept, document and enforce:
 
 ## P3 — Nice-to-have improvements
 
-### 21. Expand health check
+### 21. Expand health check ✅
 
-Extend `/api/health` to include:
+### 22. Add readiness endpoint ✅
 
-* `hasFfmpeg`
-* `ffmpegVersion`
-* `hasYtDlp`
-* `ytDlpVersion`
-* `downloadDirectoryWritable`
-* `tempDirectoryWritable`
-* `workerRunning`
+### 23. Add download history/list API ✅
 
----
-
-### 22. Add readiness endpoint
-
-Add:
-
-* `GET /api/ready`
-
-Use it for dependency readiness, not just process health.
-
----
-
-### 23. Add download history/list API
-
-Add one of:
-
-* `GET /api/downloads`
-* `GET /api/files`
-* `GET /api/library`
-
-Useful fields:
-
-* file ID
-* title
-* source URL
-* created time
-* size
-* format
-* task ID
-* local path or download URL
-
----
-
-### 24. Add file download/open API
-
-Add:
-
-* `GET /api/files/{file_id}/download`
+### 24. Add file download/open API ✅
 
 Optional for local-only UI, but useful if the frontend is browser-based.
 
@@ -226,5 +183,6 @@ At minimum:
 7. Resolve profile ID/name and format/downloadFormat inconsistencies. ✅
 8. Clarify outbox lifecycle. ✅
 9. Add validation constraints and enums. ✅
-10. Add health/readiness and file/history APIs. ← next
+10. Add health/readiness and file/history APIs. ✅
+11. Add URL validation. ← next
 
