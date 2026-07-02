@@ -163,6 +163,7 @@ svg { display: block; }
   height: 52px;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 12px;
   padding: 0;
   border: 0;

@@ -14,7 +14,7 @@
 </script>
 
 <div class="app-shell" class:sidebar-open={!collapsed}>
-  <Sidebar {health} {onOpen} {collapsed} onToggle={toggleSidebar} />
+  <Sidebar {onOpen} {collapsed} onToggle={toggleSidebar} />
   <main class="main">
     <TopBar {health} {onTask} {onViewAll} onHealth={() => onOpen('health')} />
     <slot />

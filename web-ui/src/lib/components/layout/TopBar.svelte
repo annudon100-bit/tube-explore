@@ -8,7 +8,7 @@
   export let onHealth: () => void = () => {};
 
   $: healthy = !!health && health.status === 'ok' && health.hasFfmpeg && health.hasYtdlp &&
-               health.workerRunning && health.downloadDirectoryWritable && health.tempDirectoryWritable;
+               health.downloadDirectoryWritable && health.tempDirectoryWritable;
 </script>
 
 <div class="topbar">

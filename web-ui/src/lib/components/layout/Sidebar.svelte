@@ -1,7 +1,4 @@
 <script lang="ts">
-  import type { HealthResponse } from '$lib/api/types';
-
-  export let health: HealthResponse | null = null;
   export let onOpen: (key: string) => void = () => {};
   export let onToggle: () => void = () => {};
   export let collapsed = true;
@@ -17,9 +14,6 @@
     ['settings', 'i-gear', 'Settings'],
     ['health', 'i-heart', 'Health'],
   ];
-
-  $: healthy = !!health && health.status === 'ok' && health.hasFfmpeg && health.hasYtdlp &&
-               health.workerRunning && health.downloadDirectoryWritable && health.tempDirectoryWritable;
 </script>
 
 <aside class="sidebar">
@@ -44,10 +38,4 @@
       </button>
     {/each}
   </nav>
-
-  <div class="health-pill" style="width:100%">
-    <strong class={healthy ? 'ok' : 'bad'}>{healthy ? 'System Healthy' : 'Needs Attention'}</strong>
-    <div class="health-line"><span>ffmpeg</span><b class={health?.hasFfmpeg ? 'ok' : 'bad'}>{health?.hasFfmpeg ? 'OK' : 'Missing'}</b></div>
-    <div class="health-line"><span>Worker</span><b class={health?.workerRunning ? 'ok' : 'bad'}>{health?.workerRunning ? 'Running' : 'Stopped'}</b></div>
-  </div>
 </aside>
