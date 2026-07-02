@@ -110,6 +110,16 @@ class ConversionPresetUpdate(BaseModel):
     output_ext: OutputExt | None = None
 
 
+SEED_PROFILES: list[dict[str, Any]] = [
+    {"name": "best-video", "label": "Best available quality with metadata", "download_quality_mode": "best", "embed_metadata": True, "embed_thumbnail": True, "subtitles": False},
+    {"name": "1080p", "label": "HD 1080p", "download_quality_mode": "at_most", "download_quality_value": 1080},
+    {"name": "720p", "label": "HD 720p", "download_quality_mode": "at_most", "download_quality_value": 720},
+    {"name": "4k", "label": "Ultra HD 4K", "download_quality_mode": "at_most", "download_quality_value": 2160},
+    {"name": "audio-best", "label": "Best quality audio only", "download_quality_mode": "best"},
+    {"name": "audio-mp3", "label": "MP3 320kbps audio", "download_quality_mode": "best", "convert_preset": "MP3 320kbps"},
+    {"name": "smallest", "label": "Smallest file size", "download_quality_mode": "least"},
+]
+
 SEED_PRESETS: list[dict[str, Any]] = [
     {"name": "MP4 4K", "label": "H.264 MP4 up to 2160p", "container": "mp4", "video_codec": "h264", "audio_codec": "aac", "max_height": 2160, "output_ext": "mp4"},
     {"name": "MP4 1080p", "label": "H.264 MP4 up to 1080p", "container": "mp4", "video_codec": "h264", "audio_codec": "aac", "max_height": 1080, "output_ext": "mp4"},

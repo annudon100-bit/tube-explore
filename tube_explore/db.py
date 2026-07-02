@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from tube_explore.config import get_config_dir, get_db_path
 from tube_explore.models import (
     SEED_PRESETS,
+    SEED_PROFILES,
     ConversionPreset,
     ConversionPresetCreate,
     ConversionPresetUpdate,
@@ -129,7 +130,53 @@ def init_db() -> None:
                 (key, {"rate_limit": "", "temp_directory": "", "retry_count": "3", "socket_timeout": "30"}[key]),
             )
 
+        _seed_profiles(conn)
         _seed_presets(conn)
+
+
+def _seed_profiles(conn: sqlite3.Connection) -> None:
+    now = datetime.now(UTC).isoformat()
+    for profile in SEED_PROFILES:
+        existing = conn.execute("SELECT id FROM profiles WHERE name = ?", (profile["name"],)).fetchone()
+        if existing:
+            continue
+        conn.execute(
+            """
+            INSERT INTO profiles
+                (name, label,
+                 download_directory, download_format, download_quality_mode, download_quality_value,
+                 convert_preset, convert_format, convert_quality_mode, convert_quality_value,
+                 filename_template, playlist_template,
+                 embed_metadata, embed_thumbnail, subtitles, subtitle_langs,
+                 created_at, updated_at)
+            VALUES (?, ?,
+                    ?, ?, ?, ?,
+                    ?, ?, ?, ?,
+                    ?, ?,
+                    ?, ?, ?, ?,
+                    ?, ?)
+        """,
+            (
+                profile["name"],
+                profile.get("label", ""),
+                profile.get("download_directory", ""),
+                profile.get("download_format"),
+                profile.get("download_quality_mode", "best"),
+                profile.get("download_quality_value"),
+                profile.get("convert_preset"),
+                profile.get("convert_format"),
+                profile.get("convert_quality_mode", "best"),
+                profile.get("convert_quality_value"),
+                profile.get("filename_template", "%(title)s [%(id)s].%(ext)s"),
+                profile.get("playlist_template", "%(playlist_title)s/%(playlist_index)02d - %(title)s [%(id)s].%(ext)s"),
+                int(profile.get("embed_metadata", True)),
+                int(profile.get("embed_thumbnail", True)),
+                int(profile.get("subtitles", False)),
+                profile.get("subtitle_langs"),
+                now,
+                now,
+            ),
+        )
 
 
 def _seed_presets(conn: sqlite3.Connection) -> None:
