@@ -7,9 +7,9 @@ services:
       CONFIG_DIRECTORY: /app/config
       OUTBOX_DIRECTORY: /app/outbox
     volumes:
-      - downloads:/app/downloads
-      - config:/app/config
-      - outbox:/app/outbox
+      - ./downloads:/app/downloads
+      - ./config:/app/config
+      - ./outbox:/app/outbox
 
 volumes:
   downloads:

@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -11,6 +12,8 @@ from typing import Any
 
 from tube_explore import config, db
 from tube_explore.models import ConversionPreset, Profile, QualityMode, SettingsDict
+
+logger = logging.getLogger(__name__)
 
 YTDLP_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -74,7 +77,9 @@ def _run(args: list[str], timeout: int = 120, capture: bool = True) -> str | Non
             raise RuntimeError(err)
         return result.stdout
     else:
-        subprocess.run(cmd, timeout=timeout)
+        ret = subprocess.run(cmd, timeout=timeout)
+        if ret.returncode != 0:
+            logger.warning("yt-dlp exited with code %d during download", ret.returncode)
         return None
 
 
@@ -352,19 +357,8 @@ def _download_with_profile(
             converted = _run_conversion(dl_dir, conversion_preset)
             if converted:
                 result["converted"] = converted
-        except RuntimeError:
-            outbox_files = _route_to_outbox(dl_dir, outbox_dir)
-            result["outbox"] = outbox_dir
-            _record_outbox_files(
-                outbox_files,
-                outbox_dir,
-                media_url=url,
-                task_id=task_id,
-                quality_mode=profile.download_quality_mode.value,
-                quality_value=profile.download_quality_value,
-                convert_preset=conversion_preset.name if conversion_preset else None,
-            )
-            return result
+        except RuntimeError as e:
+            logger.warning("Conversion failed for %s: %s", url, e)
 
     if not HAS_FFMPEG and not audio_only:
         outbox_files = _route_to_outbox(dl_dir, outbox_dir)
@@ -390,12 +384,12 @@ def _download_with_profile(
 
 def _collect_files(directory: str) -> list[dict[str, Any]]:
     files: list[dict[str, Any]] = []
-    for entry in sorted(os.listdir(directory)):
-        path = os.path.join(directory, entry)
-        if os.path.isfile(path):
+    for dirpath, _dirnames, filenames in os.walk(directory):
+        for fn in sorted(filenames):
+            path = os.path.join(dirpath, fn)
             files.append({
                 "id": str(uuid.uuid4()),
-                "name": entry,
+                "name": os.path.relpath(path, directory),
                 "size": os.path.getsize(path),
                 "path": path,
             })
@@ -412,9 +406,13 @@ def _route_to_outbox(src: str, outbox_dir: str) -> list[str]:
             if os.path.isdir(s):
                 shutil.copytree(s, d, dirs_exist_ok=True)
                 shutil.rmtree(s)
+                for dirpath, _dirnames, filenames in os.walk(d):
+                    for fn in filenames:
+                        rel = os.path.relpath(os.path.join(dirpath, fn), outbox_dir)
+                        moved.append(rel)
             else:
                 shutil.move(s, d)
-            moved.append(entry)
+                moved.append(entry)
         except OSError:
             pass
     return moved

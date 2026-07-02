@@ -25,6 +25,7 @@ venv/
 # Project data
 config/
 downloads/
+outbox/
 *.db
 *.db-wal
 *.db-shm
@@ -44,3 +45,6 @@ Thumbs.db
 
 # Docker
 .docker/
+
+# Web UI build output
+web-ui/build/

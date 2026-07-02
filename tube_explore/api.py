@@ -12,7 +12,8 @@ from typing import Any, Literal, cast
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from tube_explore import config, db, ytdlp
 from tube_explore.models import (
@@ -137,6 +138,16 @@ app = FastAPI(
 )
 
 
+# ── CORS ─────────────────────────────────────────────────────
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 # ── Task store ───────────────────────────────────────────────
 _tasks: dict[str, TaskInfo] = {}
 _lock = threading.Lock()
@@ -231,7 +242,7 @@ def _run_in_background(tid: str, fn, *args, **kwargs):
         except Exception as e:
             _update_task(tid, status="failed", error=str(e), progress_percent=100)
 
-    t = threading.Thread(target=wrapper, daemon=True)
+    t = threading.Thread(target=wrapper, daemon=True, name="download-worker")
     t.start()
 
 
@@ -297,13 +308,16 @@ def _sync_outbox_db() -> None:
     if not outbox_dir.is_dir():
         return
     known: set[str] = {r.file_name for r in db.list_outbox_files()}
-    for p in sorted(outbox_dir.iterdir()):
+    for p in sorted(outbox_dir.rglob("*")):
         if not p.is_file() or p.name in known:
+            continue
+        rel = str(p.relative_to(outbox_dir))
+        if rel in known:
             continue
         stat = p.stat()
         record = OutboxFileCreate(
             id=str(uuid.uuid4()),
-            file_name=p.name,
+            file_name=rel,
             file_size=stat.st_size,
             created_at=datetime.fromtimestamp(stat.st_mtime, tz=UTC),
         )
@@ -577,6 +591,7 @@ def health():
     ffmpeg_ver = ytdlp.get_ffmpeg_version()
     ytdlp_ver = ytdlp.get_ytdlp_version()
     temp_dir = settings.get("temp_directory", "").strip() or tempfile.gettempdir()
+    os.makedirs(temp_dir, exist_ok=True)
     worker_running = any(
         t.name == "download-worker" for t in threading.enumerate()
     )
@@ -651,10 +666,6 @@ async def _validation_exc(_request: Request, exc: RequestValidationError) -> JSO
 @app.exception_handler(HTTPException)
 async def _http_exc(_request: Request, exc: HTTPException) -> JSONResponse:
     return JSONResponse(status_code=exc.status_code, content=ErrorResponse(detail=exc.detail).model_dump(by_alias=True))
-
-
-
-    raise HTTPException(404, "File not found")
 
 
 # ── Outbox ────────────────────────────────────────────────────
@@ -796,3 +807,26 @@ def delete_convert_preset(preset_name: str):
         raise HTTPException(404, f"Conversion preset '{preset_name}' not found")
     db.delete_preset(existing.id)
     return OkResponse()
+
+
+# ── UI static file serving ────────────────────────────────────
+
+
+UI_BUILD_DIR = Path(__file__).resolve().parent.parent / "web-ui" / "build"
+_HAS_UI = UI_BUILD_DIR.is_dir()
+
+
+if _HAS_UI:
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/_app", StaticFiles(directory=str(UI_BUILD_DIR / "_app")), name="ui_assets")
+
+    @app.get("/favicon.svg")
+    async def _ui_favicon():
+        return FileResponse(str(UI_BUILD_DIR / "favicon.svg"))
+
+    @app.get("/{full:path}")
+    async def _ui_index(full: str):
+        if full.startswith("api/") or full == "openapi.json" or full.startswith("docs"):
+            raise HTTPException(404, "Not found")
+        return FileResponse(str(UI_BUILD_DIR / "index.html"))
