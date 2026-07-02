@@ -194,6 +194,20 @@ def test_get_nonexistent_task():
     assert resp.status_code == 404
 
 
+# ── Files ─────────────────────────────────────────────────────
+
+
+def test_list_files_empty():
+    resp = client.get("/api/files")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_download_nonexistent_file():
+    resp = client.get("/api/files/nonexistent/download")
+    assert resp.status_code == 404
+
+
 # ── Outbox ────────────────────────────────────────────────────
 
 

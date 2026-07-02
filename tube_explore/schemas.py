@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime
 from typing import Literal, Self
 
@@ -169,9 +170,18 @@ class DownloadTaskCreatedResponse(BaseModel):
 class DownloadedFile(BaseModel):
     model_config = _CAMEL_CONFIG
 
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Unique file identifier")
     name: str = Field(..., description="File name")
     size: int = Field(..., description="File size in bytes")
     path: str = Field(..., description="Absolute path to the file on disk")
+
+
+class FileInfo(DownloadedFile):
+    model_config = _CAMEL_CONFIG
+
+    task_id: str = Field(..., description="ID of the download task that produced this file")
+    source_url: str | None = Field(None, description="Source media URL")
+    created_at: datetime = Field(..., description="When the file was downloaded")
 
 
 class TaskResponse(BaseModel):

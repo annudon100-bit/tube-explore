@@ -34,6 +34,7 @@ from tube_explore.schemas import (
     DownloadTaskCreatedResponse,
     DownloadVideoRequest,
     ErrorResponse,
+    FileInfo,
     HealthResponse,
     MetadataResponse,
     OkResponse,
@@ -576,6 +577,50 @@ def health():
 @app.get("/api/ready", response_model=HealthResponse, summary="Readiness check", description="Returns 200 when the service is ready to accept requests (always ready in current implementation).", tags=["Health"])
 def ready():
     return health()
+
+
+# ── Files ─────────────────────────────────────────────────────
+
+
+@app.get("/api/files", response_model=list[FileInfo], summary="List downloaded files", description="List all completed download files across all tasks. Returns metadata including source URL, task ID, and creation time.", tags=["Files"])
+def list_files():
+    results: list[FileInfo] = []
+    with _lock:
+        tasks = list(_tasks.values())
+    for task in tasks:
+        if task.status not in ("completed",):
+            continue
+        for f in (task.result or []):
+            results.append(FileInfo(
+                id=f.get("id", str(uuid.uuid4())),
+                name=f["name"],
+                size=f["size"],
+                path=f["path"],
+                task_id=task.id,
+                source_url=task.url,
+                created_at=task.completed_at or task.created_at,
+            ))
+    return results
+
+
+@app.get("/api/files/{file_id}/download", summary="Download a file", description="Download a completed file by its file ID. Returns the file as a binary stream.", tags=["Files"])
+def download_file(file_id: str):
+    with _lock:
+        tasks = list(_tasks.values())
+    for task in tasks:
+        if task.status != "completed":
+            continue
+        for f in (task.result or []):
+            if f.get("id") == file_id:
+                path = f["path"]
+                if not os.path.isfile(path):
+                    raise HTTPException(404, "File not found on disk")
+                return StreamingResponse(
+                    open(path, "rb"),
+                    media_type="application/octet-stream",
+                    headers={"Content-Disposition": f'attachment; filename="{f["name"]}"'},
+                )
+    raise HTTPException(404, "File not found")
 
 
 # ── Outbox ────────────────────────────────────────────────────

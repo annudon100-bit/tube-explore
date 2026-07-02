@@ -394,6 +394,7 @@ def _collect_files(directory: str) -> list[dict[str, Any]]:
         path = os.path.join(directory, entry)
         if os.path.isfile(path):
             files.append({
+                "id": str(uuid.uuid4()),
                 "name": entry,
                 "size": os.path.getsize(path),
                 "path": path,
