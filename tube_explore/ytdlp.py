@@ -6,7 +6,6 @@ import subprocess
 import urllib.error
 import urllib.request
 import uuid
-from contextlib import suppress
 from datetime import datetime
 from typing import Any
 
@@ -225,26 +224,10 @@ def _build_conversion_args(
     return args
 
 
-def _run_conversion(dl_dir: str, preset: ConversionPreset) -> str | None:
+def _run_conversion_on_file(input_path: str, preset: ConversionPreset) -> str:
     if not HAS_FFMPEG:
-        return None
+        raise RuntimeError("ffmpeg not available")
 
-    video_exts = {".mp4", ".mkv", ".webm", ".avi", ".mov", ".ts"}
-    candidates: list[tuple[str, int]] = []
-
-    for entry in os.listdir(dl_dir):
-        path = os.path.join(dl_dir, entry)
-        if not os.path.isfile(path):
-            continue
-        ext = os.path.splitext(entry)[1].lower()
-        if ext in video_exts:
-            candidates.append((path, os.path.getsize(path)))
-
-    if not candidates:
-        return None
-
-    candidates.sort(key=lambda x: x[1], reverse=True)
-    input_path = candidates[0][0]
     base = os.path.splitext(input_path)[0]
     output_path = f"{base}.{preset.output_ext}"
 
@@ -257,14 +240,7 @@ def _run_conversion(dl_dir: str, preset: ConversionPreset) -> str | None:
         stderr = getattr(e, "stderr", str(e)) or str(e)
         raise RuntimeError(f"Conversion failed: {stderr[:500]}") from e
 
-    for entry in os.listdir(dl_dir):
-        path = os.path.join(dl_dir, entry)
-        if path == output_path:
-            continue
-        if os.path.isfile(path) and os.path.splitext(entry)[1].lower() in video_exts | {".opus", ".m4a", ".aac", ".flac", ".mp3", ".wav", ".ogg"}:
-            with suppress(OSError):
-                os.remove(path)
-
+    os.remove(input_path)
     return output_path
 
 
@@ -312,6 +288,46 @@ def _record_outbox_files(
         db.insert_outbox_file(record)
 
 
+# ── Per-file pipeline ────────────────────────────────────────
+
+
+def _process_downloaded_file(
+    src_path: str,
+    rel_subpath: str,
+    outbox_dir: str,
+    final_dir: str,
+    conversion_preset: ConversionPreset | None = None,
+    media_url: str | None = None,
+    task_id: str | None = None,
+    quality_mode: str | None = None,
+    quality_value: int | None = None,
+) -> bool:
+    """Route one file through outbox → [convert] → final_dir.
+    Returns True if moved to final_dir, False if stuck in outbox.
+    """
+    outbox_path = os.path.join(outbox_dir, rel_subpath)
+    os.makedirs(os.path.dirname(outbox_path), exist_ok=True)
+    shutil.move(src_path, outbox_path)
+
+    if conversion_preset and HAS_FFMPEG:
+        try:
+            outbox_path = _run_conversion_on_file(outbox_path, conversion_preset)
+        except RuntimeError as e:
+            logger.warning("Conversion failed for %s: %s", rel_subpath, e)
+            _record_outbox_files(
+                [rel_subpath], outbox_dir,
+                media_url=media_url, task_id=task_id,
+                quality_mode=quality_mode, quality_value=quality_value,
+                convert_preset=conversion_preset.name if conversion_preset else None,
+            )
+            return False
+
+    final_path = os.path.join(final_dir, rel_subpath)
+    os.makedirs(os.path.dirname(final_path), exist_ok=True)
+    shutil.move(outbox_path, final_path)
+    return True
+
+
 # ── Download ──────────────────────────────────────────────────
 
 
@@ -348,37 +364,46 @@ def _download_with_profile(
     if video_range:
         args.insert(0, f"--playlist-items={video_range}")
 
+    # ── Batch download ────────────────────────────────────
     _run(args, capture=False)
 
+    # ── Per-file pipeline ─────────────────────────────────
     result: dict[str, Any] = {}
+    failed_outbox: list[str] = []
+    url_meta = dict(
+        media_url=url,
+        task_id=task_id,
+        quality_mode=profile.download_quality_mode.value,
+        quality_value=profile.download_quality_value,
+    )
 
-    if conversion_preset and HAS_FFMPEG:
-        try:
-            converted = _run_conversion(dl_dir, conversion_preset)
-            if converted:
-                result["converted"] = converted
-        except RuntimeError as e:
-            logger.warning("Conversion failed for %s: %s", url, e)
-
+    # If ffmpeg is missing and not audio-only, route everything to outbox
     if not HAS_FFMPEG and not audio_only:
         outbox_files = _route_to_outbox(dl_dir, outbox_dir)
         result["outbox"] = outbox_dir
         _record_outbox_files(
-            outbox_files,
-            outbox_dir,
-            media_url=url,
-            task_id=task_id,
-            quality_mode=profile.download_quality_mode.value,
-            quality_value=profile.download_quality_value,
+            outbox_files, outbox_dir,
+            **url_meta,
             convert_preset=conversion_preset.name if conversion_preset else None,
         )
         return result
 
-    if dl_dir != final_dir:
-        os.makedirs(final_dir, exist_ok=True)
-        _move_downloads(dl_dir, final_dir)
+    for dirpath, _dirnames, filenames in os.walk(dl_dir):
+        for fn in sorted(filenames):
+            src = os.path.join(dirpath, fn)
+            rel = os.path.relpath(src, dl_dir)
+
+            ok = _process_downloaded_file(
+                src, rel, outbox_dir, final_dir,
+                conversion_preset=conversion_preset,
+                **url_meta,
+            )
+            if not ok:
+                failed_outbox.append(rel)
 
     result["files"] = _collect_files(final_dir)
+    if failed_outbox:
+        result["outbox"] = outbox_dir
     return result
 
 
@@ -416,20 +441,6 @@ def _route_to_outbox(src: str, outbox_dir: str) -> list[str]:
         except OSError:
             pass
     return moved
-
-
-def _move_downloads(src: str, dst: str) -> None:
-    for entry in os.listdir(src):
-        s = os.path.join(src, entry)
-        d = os.path.join(dst, entry)
-        try:
-            if os.path.isdir(s):
-                shutil.copytree(s, d, dirs_exist_ok=True)
-                shutil.rmtree(s)
-            else:
-                shutil.move(s, d)
-        except OSError:
-            pass
 
 
 # ── Public API ────────────────────────────────────────────────

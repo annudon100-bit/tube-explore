@@ -229,12 +229,11 @@ def _run_in_background(tid: str, fn, *args, **kwargs):
                 _update_task(tid, status="completed", progress_percent=100)
                 return
             outbox = result.get("outbox")
-            converted = result.get("converted")
             files = result.get("files")
-            if outbox:
+            if outbox and files:
+                _update_task(tid, status="completed", error=f"Some files routed to outbox: {outbox}", result=files, progress_percent=100)
+            elif outbox:
                 _update_task(tid, status="completed", error=f"Files routed to outbox: {outbox}", progress_percent=100)
-            elif converted:
-                _update_task(tid, status="completed", error=f"Converted to: {converted}", result=files, progress_percent=100)
             elif files:
                 _update_task(tid, status="completed", result=files, progress_percent=100)
             else:
@@ -739,9 +738,9 @@ def process_outbox_file(file_id: str, body: OutboxProcessRequest):
         raise HTTPException(400, "ffmpeg is not available; cannot retry conversion")
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        shutil.copy2(str(file_path), tmpdir)
+        tmpfile = shutil.copy2(str(file_path), tmpdir)
         try:
-            converted = ytdlp._run_conversion(tmpdir, cp)
+            converted = ytdlp._run_conversion_on_file(tmpfile, cp)
         except RuntimeError as e:
             db.update_outbox_file_status(file_id, "failed", error=str(e))
             raise HTTPException(422, str(e)) from e
