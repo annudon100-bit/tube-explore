@@ -12,23 +12,64 @@ class QualityMode(StrEnum):
     at_least = "at_least"
 
 
+class Container(StrEnum):
+    mp4 = "mp4"
+    mkv = "mkv"
+    webm = "webm"
+    mp3 = "mp3"
+    flac = "flac"
+    m4a = "m4a"
+    opus = "opus"
+    wav = "wav"
+    mov = "mov"
+    avi = "avi"
+
+
+class VideoCodec(StrEnum):
+    h264 = "h264"
+    hevc = "hevc"
+    av1 = "av1"
+    vp9 = "vp9"
+
+
+class AudioCodec(StrEnum):
+    aac = "aac"
+    mp3 = "mp3"
+    opus = "opus"
+    flac = "flac"
+    vorbis = "vorbis"
+
+
+class OutputExt(StrEnum):
+    mp4 = "mp4"
+    mkv = "mkv"
+    webm = "webm"
+    mp3 = "mp3"
+    m4a = "m4a"
+    flac = "flac"
+    opus = "opus"
+    wav = "wav"
+    mov = "mov"
+    avi = "avi"
+
+
 class ConversionPreset(BaseModel):
     id: int
     name: str
     label: str = ""
-    container: str
-    video_codec: str | None = None
+    container: Container
+    video_codec: VideoCodec | None = None
     video_bitrate: str | None = None
     video_fps: float | None = None
     video_preset: str | None = None
     video_pixfmt: str | None = None
-    audio_codec: str | None = None
+    audio_codec: AudioCodec | None = None
     audio_bitrate: str | None = None
     audio_samplerate: int | None = None
     audio_channels: int | None = None
     max_width: int | None = None
     max_height: int | None = None
-    output_ext: str
+    output_ext: OutputExt
     created_at: datetime
     updated_at: datetime
 
@@ -36,37 +77,37 @@ class ConversionPreset(BaseModel):
 class ConversionPresetCreate(BaseModel):
     name: str = Field(..., description="Unique preset name")
     label: str | None = None
-    container: str = Field(..., description="Output container (mp4, mkv, webm, mp3, flac, etc.)")
-    video_codec: str | None = Field(None, description="Video codec (h264, hevc, av1, vp9)")
+    container: Container = Field(..., description="Output container")
+    video_codec: VideoCodec | None = Field(None, description="Video codec")
     video_bitrate: str | None = Field(None, description="Video bitrate (e.g. 5M, 10M)")
     video_fps: float | None = Field(None, description="Video framerate")
     video_preset: str | None = Field(None, description="ffmpeg encoding preset (slow, medium, fast)")
     video_pixfmt: str | None = Field(None, description="Pixel format (yuv420p, yuv444p10le)")
-    audio_codec: str | None = Field(None, description="Audio codec (aac, mp3, opus, flac)")
+    audio_codec: AudioCodec | None = Field(None, description="Audio codec")
     audio_bitrate: str | None = Field(None, description="Audio bitrate (e.g. 128k, 320k)")
     audio_samplerate: int | None = Field(None, description="Audio sample rate in Hz")
     audio_channels: int | None = Field(None, description="Number of audio channels")
     max_width: int | None = Field(None, description="Max output width (pixels)")
     max_height: int | None = Field(None, description="Max output height (pixels)")
-    output_ext: str = Field(..., description="Output file extension")
+    output_ext: OutputExt = Field(..., description="Output file extension")
 
 
 class ConversionPresetUpdate(BaseModel):
     name: str | None = None
     label: str | None = None
-    container: str | None = None
-    video_codec: str | None = None
+    container: Container | None = None
+    video_codec: VideoCodec | None = None
     video_bitrate: str | None = None
     video_fps: float | None = None
     video_preset: str | None = None
     video_pixfmt: str | None = None
-    audio_codec: str | None = None
+    audio_codec: AudioCodec | None = None
     audio_bitrate: str | None = None
     audio_samplerate: int | None = None
     audio_channels: int | None = None
     max_width: int | None = None
     max_height: int | None = None
-    output_ext: str | None = None
+    output_ext: OutputExt | None = None
 
 
 SEED_PRESETS: list[dict[str, Any]] = [

@@ -10,8 +10,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from tube_explore import config, db, ytdlp
 from tube_explore.models import (
@@ -56,6 +57,10 @@ from tube_explore.schemas import (
 _404: dict[int | str, dict[str, Any]] = {404: {"model": ErrorResponse, "description": "Resource not found"}}
 _409: dict[int | str, dict[str, Any]] = {409: {"model": ErrorResponse, "description": "Conflict"}}
 _404_409: dict[int | str, dict[str, Any]] = {**_404, **_409}
+_400: dict[int | str, dict[str, Any]] = {400: {"model": ErrorResponse, "description": "Bad request"}}
+_422: dict[int | str, dict[str, Any]] = {422: {"model": ErrorResponse, "description": "Validation error"}}
+_500: dict[int | str, dict[str, Any]] = {500: {"model": ErrorResponse, "description": "Operation failed — invalid media URL, unsupported URL, extractor failure, or network failure"}}
+_503: dict[int | str, dict[str, Any]] = {503: {"model": ErrorResponse, "description": "Service unavailable — ffmpeg missing, temp directory not writable, or download directory not writable"}}
 
 
 @asynccontextmanager
@@ -233,6 +238,20 @@ def _run_in_background(tid: str, fn, *args, **kwargs):
 # ── Helpers ──────────────────────────────────────────────────
 
 
+_PROTECTED_PATHS = frozenset({
+    "/etc", "/bin", "/sbin", "/usr", "/sys", "/proc", "/dev",
+    "/boot", "/lib", "/lib64", "/root", "/var", "/run", "/opt", "/snap",
+})
+
+
+def _validate_output_path(path: str) -> str:
+    resolved = os.path.realpath(path)
+    for protected in _PROTECTED_PATHS:
+        if resolved == protected or resolved.startswith(protected + "/"):
+            raise HTTPException(422, f"Output path '{path}' resolves to protected system directory '{resolved}'")
+    return resolved
+
+
 def _resolve_profile(profile_name: str | None, body_overrides) -> Profile:
     if profile_name:
         p = db.get_profile_by_name(profile_name)
@@ -263,7 +282,7 @@ def _resolve_convert_preset(body) -> ConversionPreset | None:
 
 def _resolve_output_path(body, profile: Profile) -> str:
     if getattr(body, "download_path_override", None):
-        return body.download_path_override
+        return _validate_output_path(body.download_path_override)
     base = profile.download_directory or os.getcwd()
     if getattr(body, "output_dir", None):
         return os.path.join(base, body.output_dir)
@@ -291,8 +310,8 @@ def _sync_outbox_db() -> None:
         db.insert_outbox_file(record)
 
 
-@app.get("/api/search", response_model=SearchResponse, summary="Search media", description="Search for media content by query string. Returns a ranked list of matching results with ID, title, duration, and channel info.", tags=["Search"])
-def search(q: str = Query(..., description="Search query string"), limit: int = Query(10, ge=1, le=50, description="Maximum number of results (1–50)")):
+@app.get("/api/search", response_model=SearchResponse, responses=_500, summary="Search media", description="Search for media content by query string. Returns a ranked list of matching results with ID, title, duration, and channel info.", tags=["Search"])
+def search(q: str = Query(..., min_length=1, description="Search query string"), limit: int = Query(10, ge=1, le=50, description="Maximum number of results (1–50)")):
     try:
         results = ytdlp.search_videos(q, limit)
         return SearchResponse(query=q, count=len(results), results=[SearchResult(**r) for r in results])
@@ -300,16 +319,16 @@ def search(q: str = Query(..., description="Search query string"), limit: int = 
         raise HTTPException(500, str(e)) from e
 
 
-@app.get("/api/metadata", response_model=MetadataResponse, summary="Get media metadata", description="Fetch full metadata for a given media URL, including available formats, duration, resolution, and thumbnails.", tags=["Metadata"])
-def metadata(url: str = Query(..., description="Media URL to inspect")):
+@app.get("/api/metadata", response_model=MetadataResponse, responses=_500, summary="Get media metadata", description="Fetch full metadata for a given media URL, including available formats, duration, resolution, and thumbnails.", tags=["Metadata"])
+def metadata(url: str = Query(..., pattern=r"^https?://\S+", description="Media URL to inspect")):
     try:
         return ytdlp.get_metadata(url)
     except RuntimeError as e:
         raise HTTPException(500, str(e)) from e
 
 
-@app.get("/api/playlist", response_model=PlaylistResponse, summary="Get playlist info", description="Fetch all entries in a playlist URL, including per-video duration, position, title, and thumbnails.", tags=["Playlists"])
-def playlist(url: str = Query(..., description="Playlist URL")):
+@app.get("/api/playlist", response_model=PlaylistResponse, responses=_500, summary="Get playlist info", description="Fetch all entries in a playlist URL, including per-video duration, position, title, and thumbnails.", tags=["Playlists"])
+def playlist(url: str = Query(..., pattern=r"^https?://\S+", description="Playlist URL")):
     try:
         entries = ytdlp.get_playlist_info(url)
         total_dur = sum(e["duration"] or 0 for e in entries)
@@ -330,7 +349,7 @@ def _make_settings(raw: dict[str, str]) -> SettingsDict:
     )
 
 
-@app.post("/api/download/video", response_model=DownloadTaskCreatedResponse, status_code=202, responses=_404, summary="Download video", description="Start a background task to download a single video. Accepts profile name or per-request overrides for quality, format, directory, audio-only mode, and a conversion preset. Returns a task ID for status polling.", tags=["Downloads"])
+@app.post("/api/download/video", response_model=DownloadTaskCreatedResponse, status_code=202, responses={**_404, **_500, **_503}, summary="Download video", description="Start a background task to download a single video. Accepts profile name or per-request overrides for quality, format, directory, audio-only mode, and a conversion preset. Returns a task ID for status polling.", tags=["Downloads"])
 def download_video(body: DownloadVideoRequest):
     gs = _make_settings(db.get_all_settings())
     profile = _resolve_profile(body.profile_id, body)
@@ -344,7 +363,7 @@ def download_video(body: DownloadVideoRequest):
     return DownloadTaskCreatedResponse(task_id=tid, status="pending", status_url=f"/api/tasks/{tid}", stream_url=f"/api/tasks/{tid}/stream")
 
 
-@app.post("/api/download/playlist", response_model=DownloadTaskCreatedResponse, status_code=202, responses=_404, summary="Download playlist", description="Start a background task to download all videos in a playlist. Supports optional index range filtering, audio-only mode, and a conversion preset. Returns a task ID for status polling.", tags=["Downloads"])
+@app.post("/api/download/playlist", response_model=DownloadTaskCreatedResponse, status_code=202, responses={**_404, **_500, **_503}, summary="Download playlist", description="Start a background task to download all videos in a playlist. Supports optional index range filtering, audio-only mode, and a conversion preset. Returns a task ID for status polling.", tags=["Downloads"])
 def download_playlist(body: DownloadPlaylistRequest):
     gs = _make_settings(db.get_all_settings())
     profile = _resolve_profile(body.profile_id, body)
@@ -380,9 +399,10 @@ def get_task(task_id: str):
 
 
 @app.get("/api/tasks", response_model=list[TaskResponse], summary="List tasks", description="List all background download tasks. Sorted by creation time (newest first). Includes status, type, URL, and error info for each task.", tags=["Tasks"])
-def list_tasks():
+def list_tasks(limit: int = Query(50, ge=1, le=200, description="Maximum number of results"), offset: int = Query(0, ge=0, description="Number of results to skip")):
     with _lock:
-        return list(_tasks.values())
+        items = list(_tasks.values())
+    return items[offset:][:limit]
 
 
 @app.get("/api/tasks/{task_id}/stream", responses=_404, summary="Task status SSE stream", description="Subscribe to real-time status updates for a background task. Sends the current state immediately, then pushes updates until the task completes or fails. Sends keepalive every 30s.", tags=["Tasks"])
@@ -489,8 +509,8 @@ def delete_task(task_id: str):
 
 
 @app.get("/api/profiles", response_model=list[ProfileResponse], summary="List profiles", description="List all saved download profiles. Each profile bundles quality mode, format string, download directory, and audio-only flag.", tags=["Profiles"])
-def list_profiles():
-    return db.list_profiles()
+def list_profiles(limit: int = Query(50, ge=1, le=200, description="Maximum number of results"), offset: int = Query(0, ge=0, description="Number of results to skip")):
+    return db.list_profiles()[offset:][:limit]
 
 
 @app.post("/api/profiles", response_model=ProfileResponse, status_code=201, responses=_409, summary="Create profile", description="Create a new download profile. Name must be unique. Quality mode can be `best`, `least`, `at_most`, or `at_least` (latter two require a pixel height value).", tags=["Profiles"])
@@ -583,7 +603,7 @@ def ready():
 
 
 @app.get("/api/files", response_model=list[FileInfo], summary="List downloaded files", description="List all completed download files across all tasks. Returns metadata including source URL, task ID, and creation time.", tags=["Files"])
-def list_files():
+def list_files(limit: int = Query(50, ge=1, le=200, description="Maximum number of results"), offset: int = Query(0, ge=0, description="Number of results to skip")):
     results: list[FileInfo] = []
     with _lock:
         tasks = list(_tasks.values())
@@ -600,7 +620,7 @@ def list_files():
                 source_url=task.url,
                 created_at=task.completed_at or task.created_at,
             ))
-    return results
+    return results[offset:][:limit]
 
 
 @app.get("/api/files/{file_id}/download", summary="Download a file", description="Download a completed file by its file ID. Returns the file as a binary stream.", tags=["Files"])
@@ -620,6 +640,20 @@ def download_file(file_id: str):
                     media_type="application/octet-stream",
                     headers={"Content-Disposition": f'attachment; filename="{f["name"]}"'},
                 )
+    raise HTTPException(404, "File not found")
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_exc(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    return JSONResponse(status_code=422, content=ErrorResponse(detail=str(exc)).model_dump(by_alias=True))
+
+
+@app.exception_handler(HTTPException)
+async def _http_exc(_request: Request, exc: HTTPException) -> JSONResponse:
+    return JSONResponse(status_code=exc.status_code, content=ErrorResponse(detail=exc.detail).model_dump(by_alias=True))
+
+
+
     raise HTTPException(404, "File not found")
 
 
@@ -654,8 +688,8 @@ def _list_outbox() -> list[OutboxEntry]:
 
 
 @app.get("/api/outbox", response_model=list[OutboxEntry], summary="List outbox files", description="List all files in the outbox directory — downloads that completed but failed post-processing (e.g. missing ffmpeg).", tags=["Outbox"])
-def list_outbox():
-    return _list_outbox()
+def list_outbox(limit: int = Query(50, ge=1, le=200, description="Maximum number of results"), offset: int = Query(0, ge=0, description="Number of results to skip")):
+    return _list_outbox()[offset:][:limit]
 
 
 @app.delete("/api/outbox/{file_id}", response_model=OkResponse, responses=_404, summary="Delete outbox file", description="Remove a file from the outbox by its file ID. Also deletes the file from disk.", tags=["Outbox"])
@@ -670,7 +704,7 @@ def delete_outbox_file(file_id: str):
     return OkResponse()
 
 
-@app.post("/api/outbox/{file_id}/process", response_model=OkResponse, responses=_404, summary="Retry conversion on outbox file", description="Attempt to convert an outbox file using the specified conversion preset. Requires ffmpeg. On success the converted file is moved out of the outbox to the specified download directory (or current working directory) and the outbox entry is removed.", tags=["Outbox"])
+@app.post("/api/outbox/{file_id}/process", response_model=OkResponse, responses={**_404, **_400, **_422}, summary="Retry conversion on outbox file", description="Attempt to convert an outbox file using the specified conversion preset. Requires ffmpeg. On success the converted file is moved out of the outbox to the specified download directory (or current working directory) and the outbox entry is removed.", tags=["Outbox"])
 def process_outbox_file(file_id: str, body: OutboxProcessRequest):
     record = db.get_outbox_file(file_id)
     if not record:
@@ -722,8 +756,8 @@ def process_outbox_file(file_id: str, body: OutboxProcessRequest):
 
 
 @app.get("/api/convert-presets", response_model=list[ConversionPresetResponse], summary="List conversion presets", description="List all predefined and custom output format presets.", tags=["Conversion Presets"])
-def list_convert_presets():
-    return db.list_presets()
+def list_convert_presets(limit: int = Query(50, ge=1, le=200, description="Maximum number of results"), offset: int = Query(0, ge=0, description="Number of results to skip")):
+    return db.list_presets()[offset:][:limit]
 
 
 @app.post("/api/convert-presets", response_model=ConversionPresetResponse, status_code=201, responses=_409, summary="Create conversion preset", description="Create a custom output format preset with container, codecs, bitrate, resolution, and other encoding parameters.", tags=["Conversion Presets"])

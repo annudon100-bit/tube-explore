@@ -4,7 +4,7 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from tube_explore.models import QualityMode
+from tube_explore.models import AudioCodec, Container, OutputExt, QualityMode, VideoCodec
 
 
 def _to_camel(string: str) -> str:
@@ -47,7 +47,7 @@ class SearchResult(BaseModel):
 class SearchResponse(BaseModel):
     model_config = _CAMEL_CONFIG
 
-    query: str
+    query: str = Field(..., min_length=1, description="Search query string")
     count: int
     results: list[SearchResult]
 
@@ -114,7 +114,7 @@ class DownloadVideoRequest(BaseModel):
 
     url: str = Field(..., pattern=_URL_PATTERN, json_schema_extra=_URL_FORMAT, description="Media video URL")
     output_dir: str | None = Field(None, description="Relative subdirectory appended to the profile's download directory")
-    download_path_override: str | None = Field(None, alias="downloadPathOverride", description="Absolute path override for the final output destination. Ignores profile's download_directory.")
+    download_path_override: str | None = Field(None, alias="downloadPathOverride", description="Absolute path override for the final output destination. Ignores profile's download_directory. Must not resolve to a protected system directory. Returns 422 if the path traverses into /etc, /bin, /usr, /sys, /proc, /dev, /boot, /lib, /root, /var, /run, or similar system paths.")
     profile_id: str | None = Field(None, alias="profileId", description="Name of an existing profile to use")
     convert_preset: str | None = Field(None, description="Name of a conversion preset to apply")
     audio_only: bool = False
@@ -139,9 +139,9 @@ class DownloadPlaylistRequest(BaseModel):
 
     url: str = Field(..., pattern=_URL_PATTERN, json_schema_extra=_URL_FORMAT, description="Media playlist URL")
     output_dir: str | None = Field(None, description="Relative subdirectory appended to the profile's download directory")
-    download_path_override: str | None = Field(None, alias="downloadPathOverride", description="Absolute path override for the final output destination. Ignores profile's download_directory.")
+    download_path_override: str | None = Field(None, alias="downloadPathOverride", description="Absolute path override for the final output destination. Ignores profile's download_directory. Must not resolve to a protected system directory. Returns 422 if the path traverses into /etc, /bin, /usr, /sys, /proc, /dev, /boot, /lib, /root, /var, /run, or similar system paths.")
     profile_id: str | None = Field(None, alias="profileId", description="Name of an existing profile to use")
-    range: str | None = Field(None, description="Playlist item range, e.g. 1-5")
+    range: str | None = Field(None, pattern=r"^\d+(-\d+)?$", description="Playlist item range, e.g. 1-5")
     convert_preset: str | None = Field(None, description="Name of a conversion preset to apply")
     audio_only: bool = False
 
@@ -219,7 +219,7 @@ class TaskResultResponse(BaseModel):
 class ProfileCreateRequest(BaseModel):
     model_config = _CAMEL_CONFIG
 
-    name: str = Field(..., description="Unique profile name")
+    name: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_ -]+$", description="Unique profile name")
     label: str | None = None
     download_directory: str | None = None
     download_format: str | None = None
@@ -381,21 +381,21 @@ class OkResponse(BaseModel):
 class ConversionPresetCreateRequest(BaseModel):
     model_config = _CAMEL_CONFIG
 
-    name: str = Field(..., description="Unique preset name")
+    name: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_ -]+$", description="Unique preset name")
     label: str | None = None
-    container: str = Field(..., description="Output container (mp4, mkv, webm, mp3, flac)")
-    video_codec: str | None = Field(None, description="Video codec (h264, hevc, av1, vp9)")
-    video_bitrate: str | None = Field(None, description="Video bitrate (e.g. 5M)")
+    container: Container = Field(..., description="Output container")
+    video_codec: VideoCodec | None = Field(None, description="Video codec")
+    video_bitrate: str | None = Field(None, pattern=r"^\d+(\.\d+)?[kMG]?$", description="Video bitrate (e.g. 5M)")
     video_fps: float | None = Field(None, description="Video framerate")
     video_preset: str | None = Field(None, description="ffmpeg encoding preset (slow, medium, fast)")
     video_pixfmt: str | None = Field(None, description="Pixel format (yuv420p, yuv444p10le)")
-    audio_codec: str | None = Field(None, description="Audio codec (aac, mp3, opus, flac)")
-    audio_bitrate: str | None = Field(None, description="Audio bitrate (e.g. 128k)")
+    audio_codec: AudioCodec | None = Field(None, description="Audio codec")
+    audio_bitrate: str | None = Field(None, pattern=r"^\d+(\.\d+)?[kMG]?$", description="Audio bitrate (e.g. 128k)")
     audio_samplerate: int | None = Field(None, description="Audio sample rate in Hz")
     audio_channels: int | None = Field(None, description="Number of audio channels")
     max_width: int | None = Field(None, description="Max output width (pixels)")
     max_height: int | None = Field(None, description="Max output height (pixels)")
-    output_ext: str = Field(..., description="Output file extension")
+    output_ext: OutputExt = Field(..., description="Output file extension")
 
 
 class ConversionPresetUpdateRequest(BaseModel):
@@ -403,19 +403,19 @@ class ConversionPresetUpdateRequest(BaseModel):
 
     name: str | None = None
     label: str | None = None
-    container: str | None = None
-    video_codec: str | None = None
+    container: Container | None = None
+    video_codec: VideoCodec | None = None
     video_bitrate: str | None = None
     video_fps: float | None = None
     video_preset: str | None = None
     video_pixfmt: str | None = None
-    audio_codec: str | None = None
+    audio_codec: AudioCodec | None = None
     audio_bitrate: str | None = None
     audio_samplerate: int | None = None
     audio_channels: int | None = None
     max_width: int | None = None
     max_height: int | None = None
-    output_ext: str | None = None
+    output_ext: OutputExt | None = None
 
 
 class ConversionPresetResponse(BaseModel):
@@ -424,18 +424,18 @@ class ConversionPresetResponse(BaseModel):
     id: int
     name: str
     label: str = ""
-    container: str
-    video_codec: str | None = None
+    container: Container
+    video_codec: VideoCodec | None = None
     video_bitrate: str | None = None
     video_fps: float | None = None
     video_preset: str | None = None
     video_pixfmt: str | None = None
-    audio_codec: str | None = None
+    audio_codec: AudioCodec | None = None
     audio_bitrate: str | None = None
     audio_samplerate: int | None = None
     audio_channels: int | None = None
     max_width: int | None = None
     max_height: int | None = None
-    output_ext: str
+    output_ext: OutputExt
     created_at: datetime
     updated_at: datetime

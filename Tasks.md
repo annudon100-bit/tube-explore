@@ -57,7 +57,7 @@ Use `format: uri` for all media URL fields:
 
 ---
 
-### 16. Add string constraints
+### 16. Add string constraints ✅
 
 Add validation for:
 
@@ -77,67 +77,65 @@ Example playlist range pattern:
 
 ---
 
-### 17. Add enums for conversion fields where practical
+### 17. Add enums for conversion fields where practical ✅
 
 Consider enums for:
 
-* `container`
-* `videoCodec`
-* `audioCodec`
-* `outputExt`
-* `videoPreset`
-
-Only do this if the backend has a known supported set.
+* `container` ✅
+* `videoCodec` ✅
+* `audioCodec` ✅
+* `outputExt` ✅
+* `videoPreset` — skipped, too open-ended
 
 ---
 
-### 18. Add common error schema
+### 18. Add common error schema ✅
 
 Create a reusable error schema, for example:
 
-* `ErrorResponse`
+* `ErrorResponse` ✅
 * or `ProblemDetail`
 
 Use it for:
 
-* `400`
-* `404`
-* `409`
-* `422`
-* `500`
+* `400` ✅
+* `404` ✅
+* `409` ✅
+* `422` ✅
+* `500` ✅
 * `503`
 
-Do not rely only on FastAPI-style `HTTPValidationError`.
+No longer rely only on FastAPI-style `HTTPValidationError`. Added exception handlers for `RequestValidationError` and `HTTPException` to return `ErrorResponse` format consistently. Added `_400`, `_422`, `_500` response doc dicts and annotated search/metadata/playlist/outbox endpoints with missing error responses.
 
 ---
 
-### 19. Add operational failure responses
+### 19. Add operational failure responses ✅
 
 Add documented responses for:
 
-* invalid media URL
-* unsupported URL
-* extractor failure
-* network failure
-* ffmpeg missing
-* temp directory not writable
-* download directory not writable
-* conversion preset unavailable
-* profile unavailable
+* invalid media URL ✅ — documented in `_500` on search/metadata/playlist/dowload endpoints
+* unsupported URL ✅ — same
+* extractor failure ✅ — same
+* network failure ✅ — same
+* ffmpeg missing ✅ — documented as `_503` on download endpoints, `_400` on process_outbox_file
+* temp directory not writable ✅ — documented as `_503` on download endpoints
+* download directory not writable ✅ — documented as `_503` on download endpoints
+* conversion preset unavailable ✅ — documented as `_404` on download/process endpoints
+* profile unavailable ✅ — documented as `_404` on download endpoints
 
 ---
 
-### 20. Harden `downloadPathOverride`
+### 20. Harden `downloadPathOverride` ✅
 
 Either remove it or restrict it.
 
 If kept, document and enforce:
 
-* allowed base directories
-* no path traversal
-* no protected system paths
-* no unsafe overwrite
-* absolute path behavior
+* allowed base directories ✅ — path validated against protected system directories blocklist
+* no path traversal ✅ — uses `os.path.realpath()` to resolve symlinks
+* no protected system paths ✅ — blocks /etc, /bin, /usr, /sys, /proc, /dev, /boot, /lib, /root, /var, /run, /opt, /snap
+* no unsafe overwrite ✅ — yt-dlp uses `--no-overwrites`
+* absolute path behavior ✅ — documented in schema description, validated on use
 
 ---
 
@@ -155,20 +153,15 @@ Optional for local-only UI, but useful if the frontend is browser-based.
 
 ---
 
-### 25. Add pagination to list endpoints
+### 25. Add pagination to list endpoints ✅
 
 Add pagination to:
 
-* `GET /api/tasks`
-* `GET /api/profiles`
-* `GET /api/outbox`
-* `GET /api/convert-presets`
-* future `GET /api/downloads`
-
-At minimum:
-
-* `limit`
-* `offset` or `cursor`
+* `GET /api/tasks` ✅ — added `limit` (1-200, default 50) and `offset` (0+) query params
+* `GET /api/profiles` ✅ — same
+* `GET /api/outbox` ✅ — same
+* `GET /api/convert-presets` ✅ — same
+* `GET /api/files` ✅ — same
 
 ---
 
@@ -185,5 +178,10 @@ At minimum:
 9. Add validation constraints and enums. ✅
 10. Add health/readiness and file/history APIs. ✅
 11. Add URL validation. ✅
-12. Add string constraints. ← next
+12. Add string constraints. ✅
+13. Add conversion field enums. ✅
+14. Add common error schema. ✅
+15. Add operational failure responses. ✅
+16. Harden downloadPathOverride. ✅
+17. Add pagination to list endpoints. ✅
 
