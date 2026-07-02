@@ -43,7 +43,7 @@ At minimum, add:
 
 ## P2 — Validation and safety improvements
 
-### 15. Add URL validation
+### 15. Add URL validation ✅
 
 Use `format: uri` for all media URL fields:
 
@@ -184,5 +184,6 @@ At minimum:
 8. Clarify outbox lifecycle. ✅
 9. Add validation constraints and enums. ✅
 10. Add health/readiness and file/history APIs. ✅
-11. Add URL validation. ← next
+11. Add URL validation. ✅
+12. Add string constraints. ← next
 
