@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import ModalFrame from '$lib/components/shared/ModalFrame.svelte';
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
   import ProgressBar from '$lib/components/shared/ProgressBar.svelte';
@@ -16,8 +17,9 @@
   let current = task;
   let result: TaskResultResponse | null = null;
   let error: string | null = null;
-  let streamConnected = false;
   let stopStream: (() => void) | null = null;
+
+  $: isPartiallyFailed = current.status === 'completed' && !!current.error;
 
   async function refresh() {
     try { current = await getTask(current.id); } catch (e) { error = e instanceof Error ? e.message : 'Unable to refresh task'; }
@@ -34,11 +36,12 @@
   async function doDelete() {
     try { await deleteTask(current.id); showToast('Task deleted'); onChanged(); onClose(); } catch (e) { error = e instanceof Error ? e.message : 'Unable to delete'; }
   }
-  function startStream() {
-    if (stopStream) stopStream();
-    streamConnected = true;
-    stopStream = connectTaskStream(current.id, (update) => current = update, () => { streamConnected = false; });
-  }
+
+  onMount(() => {
+    if (!['completed', 'failed', 'cancelled'].includes(current.status)) {
+      stopStream = connectTaskStream(current.id, (update) => current = update, () => {});
+    }
+  });
 </script>
 
 <ModalFrame title="Task details" onClose={() => { stopStream?.(); onClose(); }}>
@@ -60,15 +63,15 @@
     <div class="kv"><b>Updated</b><span>{dateTime(current.updatedAt)}</span></div>
     <div class="kv"><b>Completed</b><span>{dateTime(current.completedAt)}</span></div>
     {#if current.error}<div class="kv"><b>Error</b><span class="bad">{current.error}</span></div>{/if}
-    <div class="kv"><b>Parameters</b><pre class="code">{JSON.stringify(current.params || {}, null, 2)}</pre></div>
 
     <div class="action-row">
       <button class="btn" on:click={refresh}>Refresh</button>
-      <button class="btn blue" disabled={streamConnected || ['completed','failed','cancelled'].includes(current.status)} on:click={startStream}>Stream updates</button>
       <button class="btn orange" disabled={!['pending','running'].includes(current.status)} on:click={doCancel}>Cancel</button>
-      <button class="btn green" disabled={current.status !== 'failed'} on:click={doRetry}>Retry</button>
+      <button class="btn green" disabled={!(current.status === 'failed' || isPartiallyFailed)} on:click={doRetry}>Retry</button>
       <button class="btn red" disabled={['pending','running'].includes(current.status)} on:click={doDelete}>Delete</button>
-      <button class="btn" on:click={loadResult}>View result</button>
+      {#if current.status === 'completed'}
+        <button class="btn" on:click={loadResult}>View result</button>
+      {/if}
     </div>
 
     {#if result || current.result}

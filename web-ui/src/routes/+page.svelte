@@ -2,7 +2,6 @@
   import { onMount } from 'svelte';
   import AppShell from '$lib/components/layout/AppShell.svelte';
   import HeroActionPanel from '$lib/components/home/HeroActionPanel.svelte';
-  import RecentActivity from '$lib/components/home/RecentActivity.svelte';
   import QuickManageCards from '$lib/components/home/QuickManageCards.svelte';
   import ToastHost from '$lib/components/shared/ToastHost.svelte';
   import ModalFrame from '$lib/components/shared/ModalFrame.svelte';
@@ -24,13 +23,11 @@
   import { getMetadata } from '$lib/api/metadata';
   import { getPlaylist } from '$lib/api/playlist';
   import { getHealth } from '$lib/api/health';
-  import { listTasks } from '$lib/api/tasks';
   import { listProfiles } from '$lib/api/profiles';
   import { listPresets } from '$lib/api/presets';
   import type { ConversionPresetResponse, HealthResponse, MetadataResponse, PlaylistResponse, ProfileResponse, SearchResponse, TaskResponse } from '$lib/api/types';
 
   let health: HealthResponse | null = null;
-  let tasks: TaskResponse[] = [];
   let profiles: ProfileResponse[] = [];
   let presets: ConversionPresetResponse[] = [];
   let busy = false;
@@ -44,9 +41,8 @@
 
   async function refreshChrome() {
     try {
-      [health, tasks, profiles, presets] = await Promise.all([
+      [health, profiles, presets] = await Promise.all([
         getHealth().catch(() => null),
-        listTasks({ limit: 5, offset: 0 }).catch(() => []),
         listProfiles({ limit: 200, offset: 0 }).catch(() => []),
         listPresets({ limit: 200, offset: 0 }).catch(() => [])
       ]);
@@ -63,11 +59,13 @@
   function openDownloadVideo(url = '') { downloadUrl = url; dialog = 'videoDownload'; }
   function openDownloadPlaylist(url = '') { downloadUrl = url; dialog = 'playlistDownload'; }
   function openDialog(key: string) { dialog = key; }
+  function handleTask(task: TaskResponse) { selectedTask = task; dialog = 'taskDetail'; }
+  function handleViewAll() { dialog = 'tasks'; }
 
   onMount(refreshChrome);
 </script>
 
-<AppShell {health} onOpen={openDialog} onNewDownload={() => openDownloadVideo('')}>
+<AppShell {health} onOpen={openDialog} onNewDownload={() => openDownloadVideo('')} onTask={handleTask} onViewAll={handleViewAll}>
   <HeroActionPanel
     {busy}
     onSearch={(q, limit) => run(() => searchMedia(q, limit), (data) => { searchResult = data; dialog = 'searchResults'; })}
@@ -80,13 +78,20 @@
   <ErrorMessage message={error} />
 
   <div class="grid main-grid">
-    <RecentActivity tasks={tasks} onTask={(task) => { selectedTask = task; dialog = 'taskDetail'; }} onViewAll={() => dialog = 'tasks'} />
     <section class="panel card">
-      <div class="card-header"><h2>Use it your way</h2></div>
+      <div class="card-header"><h2>Quick actions</h2></div>
       <div class="simple-list">
         <button class="row clickable" on:click={() => openDownloadVideo('')}><div class="avatar">⇩</div><div><div class="row-title">New video download</div><div class="row-sub">Use a profile or override options.</div></div><strong>→</strong></button>
         <button class="row clickable" on:click={() => openDownloadPlaylist('')}><div class="avatar">♫</div><div><div class="row-title">New playlist download</div><div class="row-sub">Optionally select a range.</div></div><strong>→</strong></button>
         <button class="row clickable" on:click={() => dialog = 'files'}><div class="avatar">▣</div><div><div class="row-title">Downloaded files</div><div class="row-sub">Browse completed downloads.</div></div><strong>→</strong></button>
+      </div>
+    </section>
+    <section class="panel card">
+      <div class="card-header"><h2>Use it your way</h2></div>
+      <div class="simple-list">
+        <button class="row clickable" on:click={() => dialog = 'profiles'}><div class="avatar">♙</div><div><div class="row-title">Manage profiles</div><div class="row-sub">Create and edit download profiles.</div></div><strong>→</strong></button>
+        <button class="row clickable" on:click={() => dialog = 'presets'}><div class="avatar">⚙</div><div><div class="row-title">Manage presets</div><div class="row-sub">Customize conversion presets.</div></div><strong>→</strong></button>
+        <button class="row clickable" on:click={() => dialog = 'settings'}><div class="avatar">◌</div><div><div class="row-title">Settings</div><div class="row-sub">Configure application settings.</div></div><strong>→</strong></button>
       </div>
     </section>
   </div>

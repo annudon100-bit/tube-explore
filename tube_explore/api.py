@@ -494,14 +494,16 @@ def _re_run_task(task: TaskInfo) -> str:
     return tid
 
 
-@app.post("/api/tasks/{task_id}/retry", response_model=DownloadTaskCreatedResponse, responses=_404_409, summary="Retry task", description="Retry a failed download task. Creates a new task with the same parameters and returns the new task ID and status URLs.", tags=["Tasks"])
+@app.post("/api/tasks/{task_id}/retry", response_model=DownloadTaskCreatedResponse, responses=_404_409, summary="Retry task", description="Retry a failed or partially-failed download task. Creates a new task with the same parameters and returns the new task ID and status URLs.", tags=["Tasks"])
 def retry_task(task_id: str):
     with _lock:
         task = _tasks.get(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
-    if task.status != "failed":
+    if task.status not in ("failed", "completed"):
         raise HTTPException(409, f"Cannot retry task in status '{task.status}'")
+    if task.status == "completed" and not task.error:
+        raise HTTPException(409, "Task completed successfully with no errors; nothing to retry")
     tid = _re_run_task(task)
     return DownloadTaskCreatedResponse(task_id=tid, status="pending", status_url=f"/api/tasks/{tid}", stream_url=f"/api/tasks/{tid}/stream")
 

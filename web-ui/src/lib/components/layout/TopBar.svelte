@@ -1,6 +1,10 @@
 <script lang="ts">
+  import NotificationDropdown from './NotificationDropdown.svelte';
+  import type { TaskResponse } from '$lib/api/types';
+
   export let onNewDownload: () => void = () => {};
-  let light = true;
+  export let onTask: (task: TaskResponse) => void = () => {};
+  export let onViewAll: () => void = () => {};
 </script>
 
 <div class="topbar">
@@ -9,7 +13,7 @@
     <p>Search, inspect, and download media without clutter.</p>
   </div>
   <div class="top-actions">
-    <button class="btn" type="button" on:click={() => light = !light}>{light ? '☀ Light' : '◐ Dark'}</button>
+    <NotificationDropdown {onTask} {onViewAll} />
     <button class="btn primary" type="button" on:click={onNewDownload}>＋ New Download</button>
   </div>
 </div>
