@@ -5,7 +5,6 @@
 
   export let health: HealthResponse | null = null;
   export let onOpen: (key: string) => void = () => {};
-  export let onNewDownload: () => void = () => {};
   export let onTask: (task: TaskResponse) => void = () => {};
   export let onViewAll: () => void = () => {};
 

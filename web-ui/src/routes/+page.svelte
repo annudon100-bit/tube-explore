@@ -68,7 +68,7 @@
 
 <Icons />
 
-<AppShell {health} onOpen={openDialog} onNewDownload={() => openDownloadVideo('')} onTask={handleTask} onViewAll={handleViewAll}>
+<AppShell {health} onOpen={openDialog} onTask={handleTask} onViewAll={handleViewAll}>
   <section class="hero">
     <div class="logo-lockup">
       <svg class="logo-mark" viewBox="0 0 120 120" aria-hidden="true">
