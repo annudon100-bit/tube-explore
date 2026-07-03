@@ -19,13 +19,33 @@ logger = logging.getLogger(__name__)
 # yt-dlp stderr progress regexes
 _PLAYLIST_PAT = re.compile(r"\[download\] Downloading video (\d+) of (\d+)")
 _PROGRESS_PAT = re.compile(r"\[download\]\s+([\d.]+)%")
-_DEST_PAT = re.compile(r"\[download\] Destination:\s+(.+)")
+_DEST_PAT = re.compile(r"\[download\] (?:Destination:\s+)?(/.+)")
 _COMPLETE_PAT = re.compile(r"\[download\]\s+100%")
+_INFO_PAT = re.compile(r"\[info\] .+ Downloading \d+ format\(s\)")
+_MERGER_PAT = re.compile(r"\[Merger\] Merging formats into")
+_EXTRACT_AUDIO_PAT = re.compile(r"\[ExtractAudio\] Destination:")
+_REMUX_PAT = re.compile(r"\[VideoRemuxer\] Remuxing")
+_DELETE_ORIG_PAT = re.compile(r"Deleting original file")
+_PLAYLIST_DL_PAT = re.compile(r"\[download\] Downloading playlist:")
+_PLAYLIST_ITEMS_PAT = re.compile(r"Downloading (\d+) items")
+_TOTAL_BYTES_PAT = re.compile(r"of\s+([\d.]+)\s*([KMG]iB)")
+
+# Phase definitions with percentage ranges
+PHASES = [
+    ("fetching_metadata", 0, 8),
+    ("preparing", 8, 14),
+    ("downloading", 14, 72),
+    ("merging", 72, 84),
+    ("converting", 84, 96),
+    ("finalizing", 96, 100),
+]
+PHASE_MAP = {name: (start, end) for name, start, end in PHASES}
 
 YTDLP_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HAS_FFMPEG = shutil.which("ffmpeg") is not None
 HAS_YTDLP = shutil.which("yt-dlp") is not None or os.path.isfile(os.path.join(SCRIPT_DIR, "yt-dlp"))
+THUMBNAIL_DIR = os.path.join(config.get_metadata_dir(), "thumbnails")
 
 # Track running download processes for cancellation
 _running_procs: dict[str, subprocess.Popen] = {}
@@ -72,6 +92,36 @@ def ensure_binary() -> str:
         raise RuntimeError(f"Failed to download yt-dlp: {e}") from e
 
 
+def cache_thumbnail(video_id: str, thumbnail_url: str | None) -> str | None:
+    """Download and cache a video thumbnail. Returns the relative path from
+    METADATA_DIRECTORY/thumbnails, or None on failure."""
+    if not thumbnail_url:
+        return None
+    os.makedirs(THUMBNAIL_DIR, exist_ok=True)
+    ext = thumbnail_url.rsplit(".", 1)[-1].split("?")[0] if "." in thumbnail_url else "jpg"
+    dest = os.path.join(THUMBNAIL_DIR, f"{video_id}.{ext}")
+    if os.path.isfile(dest):
+        return f"thumbnails/{video_id}.{ext}"
+    try:
+        urllib.request.urlretrieve(thumbnail_url, dest)
+        return f"thumbnails/{video_id}.{ext}"
+    except (urllib.error.URLError, OSError) as e:
+        logger.warning("Failed to cache thumbnail for %s: %s", video_id, e)
+        return None
+
+
+def _parse_total_bytes(line: str) -> int | None:
+    """Parse total bytes from a yt-dlp progress line like '45.2% of   51.16MiB'."""
+    m = _TOTAL_BYTES_PAT.search(line)
+    if not m:
+        return None
+    val = float(m.group(1))
+    unit = m.group(2)
+    multipliers = {"KiB": 1024, "MiB": 1024 ** 2, "GiB": 1024 ** 3, "TiB": 1024 ** 4}
+    mult = multipliers.get(unit, 1)
+    return int(val * mult)
+
+
 def _run(
     args: list[str],
     timeout: int = 120,
@@ -80,9 +130,10 @@ def _run(
     task_id: str | None = None,
 ) -> str | None:
     """Run yt-dlp. When capture=True, returns stdout (for metadata queries).
-    When capture=False, streams stderr line-by-line for progress parsing.
-    progress_callback(overall_percent: int, file_progress: list[dict]) is
-    called on each progress update.
+    When capture=False, streams output line-by-line for progress parsing.
+    progress_callback(overall_percent: int, file_progress: list[dict], extra: dict | None)
+    is called on each progress update. 'extra' contains: step, downloaded_bytes,
+    total_bytes, speed, eta.
     """
     bin_path = ensure_binary()
     cmd = [bin_path, "--no-warnings"] + args
@@ -102,6 +153,12 @@ def _run(
     fp_list: list[dict[str, Any]] = []
     current_index = 0
     fp_total = 1
+    current_phase = "fetching_metadata"
+    prev_phase = "fetching_metadata"
+    current_total_bytes: int | None = None
+    current_downloaded_bytes: int = 0
+    current_speed: str | None = None
+    current_eta: str | None = None
 
     def _ensure(idx: int) -> None:
         while len(fp_list) <= idx:
@@ -114,16 +171,35 @@ def _run(
                 "status": "pending",
             })
 
+    def _set_phase(phase: str) -> bool:
+        nonlocal current_phase, prev_phase
+        if phase != current_phase:
+            prev_phase = current_phase
+            current_phase = phase
+            return True
+        return False
+
+    def _build_extra() -> dict:
+        return {
+            "step": current_phase,
+            "downloaded_bytes": current_downloaded_bytes,
+            "total_bytes": current_total_bytes,
+            "speed": current_speed,
+            "eta": current_eta,
+        }
+
     def _fire() -> None:
         if not progress_callback:
             return
         total_pct = sum(f["percent"] for f in fp_list) / len(fp_list) if fp_list else 0.0
-        progress_callback(int(total_pct), [dict(f) for f in fp_list])
+        extra = _build_extra()
+        logger.info("_fire: total_pct=%s extra=%s", total_pct, extra)
+        progress_callback(int(total_pct), [dict(f) for f in fp_list], extra)
 
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
     )
@@ -133,10 +209,57 @@ def _run(
         with _proc_lock:
             _running_procs[task_id] = proc
 
+    def _extract_progress_stats(line: str) -> tuple[float | None, str | None, str | None, int | None]:
+        """Extract percent, speed, eta, total_bytes from any progress-like line."""
+        m = _PROGRESS_PAT.search(line)
+        if not m:
+            return None, None, None, None
+        pct = float(m.group(1))
+        speed: str | None = None
+        eta: str | None = None
+        if " at " in line and " ETA " in line:
+            try:
+                after_pct = line.split("%", 1)[1]
+                at_part = after_pct.split(" at ", 1)[1] if " at " in after_pct else ""
+                speed = at_part.split(" ETA ")[0].strip() if " ETA " in at_part else None
+                eta = at_part.split(" ETA ")[1].strip() if " ETA " in at_part else None
+            except (IndexError, ValueError):
+                pass
+        total_bytes = _parse_total_bytes(line)
+        return pct, speed, eta, total_bytes
+
+    def _apply_stats(line: str) -> None:
+        nonlocal current_speed, current_eta, current_total_bytes, current_downloaded_bytes
+        pct, speed, eta, total_bytes = _extract_progress_stats(line)
+        if pct is None:
+            return
+        downloaded = int(pct / 100.0 * total_bytes) if total_bytes else 0
+        current_speed = speed
+        current_eta = eta
+        if total_bytes:
+            current_total_bytes = total_bytes
+            current_downloaded_bytes = downloaded
+
     try:
         assert proc.stdout is not None
         for raw_line in proc.stdout:
             line = raw_line.rstrip("\n")
+
+                    # ── Extract stats from every line that has them ──
+            _apply_stats(line)
+
+            # ── Phase detection ─────────────────────────────
+            if _INFO_PAT.search(line) and current_phase == "fetching_metadata":
+                _set_phase("preparing")
+                _fire()
+                continue
+
+            if _PLAYLIST_DL_PAT.search(line) or _PLAYLIST_ITEMS_PAT.search(line):
+                _set_phase("preparing")
+                _fire()
+                continue
+
+            # ── Playlist item index ──────────────────────────
             m = _PLAYLIST_PAT.search(line)
             if m:
                 idx = int(m.group(1))
@@ -145,46 +268,64 @@ def _run(
                 current_index = idx - 1
                 _ensure(total - 1)
                 fp_list[current_index]["status"] = "downloading"
+                _set_phase("downloading")
                 _fire()
                 continue
 
+            # ── Destination (file path = file start) ─────────
             m = _DEST_PAT.search(line)
             if m:
                 title = m.group(1).strip()
                 _ensure(current_index)
                 fp_list[current_index]["title"] = title
+                current_downloaded_bytes = 0
+                current_total_bytes = None
+                _set_phase("downloading")
                 _fire()
                 continue
 
-            if _COMPLETE_PAT.search(line):
+            # ── Completing a file ────────────────────────────
+            if _COMPLETE_PAT.search(line) and not _MERGER_PAT.search(line):
                 _ensure(current_index)
                 fp_list[current_index]["percent"] = 100.0
                 fp_list[current_index]["status"] = "completed"
                 _fire()
                 continue
 
+            # ── Merging (DASH formats) ───────────────────────
+            if _MERGER_PAT.search(line):
+                _set_phase("merging")
+                _fire()
+                continue
+
+            # ── Converting (audio extraction or remux) ───────
+            if _EXTRACT_AUDIO_PAT.search(line) or _REMUX_PAT.search(line):
+                _set_phase("converting")
+                _fire()
+                continue
+
+            # ── Finalizing ───────────────────────────────────
+            if _DELETE_ORIG_PAT.search(line):
+                _set_phase("finalizing")
+                _fire()
+                continue
+
+            # ── Progress line ────────────────────────────────
             m = _PROGRESS_PAT.search(line)
             if m:
                 pct = float(m.group(1))
-                speed: str | None = None
-                eta: str | None = None
-                if " at " in line and " ETA " in line:
-                    try:
-                        after_pct = line.split("%", 1)[1]
-                        at_part = after_pct.split(" at ", 1)[1] if " at " in after_pct else ""
-                        speed = at_part.split(" ETA ")[0].strip() if " ETA " in at_part else None
-                        eta = at_part.split(" ETA ")[1].strip() if " ETA " in at_part else None
-                    except (IndexError, ValueError):
-                        pass
                 _ensure(current_index)
                 fp_list[current_index]["percent"] = pct
-                fp_list[current_index]["speed"] = speed
-                fp_list[current_index]["eta"] = eta
+                fp_list[current_index]["speed"] = current_speed
+                fp_list[current_index]["eta"] = current_eta
                 fp_list[current_index]["status"] = "downloading"
                 _fire()
 
         proc.wait()
-        if proc.returncode not in (0, -9):
+        if proc.returncode == 0:
+            _set_phase("finalizing")
+            _fire()
+        elif proc.returncode not in (0, -9):
             logger.warning("yt-dlp exited with code %d during download", proc.returncode)
     finally:
         if task_id:

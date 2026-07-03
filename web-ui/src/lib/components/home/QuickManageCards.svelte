@@ -2,8 +2,6 @@
   export let onOpen: (key: string) => void = () => {};
   const cards = [
     ['profiles', '♙', 'Profiles', 'Create and manage download profiles.', 'tint-blue'],
-    ['presets', '⚙', 'Presets', 'Configure conversion presets.', 'tint-green'],
-    ['outbox', '▱', 'Outbox', 'Review and retry failed conversions.', 'tint-purple'],
     ['settings', '◌', 'Settings', 'Adjust global preferences.', 'tint-orange']
   ];
 </script>

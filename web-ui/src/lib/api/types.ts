@@ -75,6 +75,8 @@ export interface DownloadPlaylistRequest extends DownloadRequestBase {
 export interface DownloadTaskCreatedResponse { taskId: string; status: 'pending'; statusUrl: string; }
 
 export interface DownloadedFile { id?: string; name: string; size: number; path: string; }
+export type ProgressStep = 'fetching_metadata' | 'preparing' | 'downloading' | 'merging' | 'converting' | 'finalizing';
+
 export interface FileProgress {
   index: number;
   title?: string | null;
@@ -82,6 +84,11 @@ export interface FileProgress {
   speed?: string | null;
   eta?: string | null;
   status: string;
+  downloadedBytes?: number | null;
+  totalBytes?: number | null;
+  channel?: string | null;
+  duration?: number | null;
+  formatInfo?: FormatInfo[] | null;
 }
 export interface TaskResponse {
   id: string;
@@ -90,7 +97,20 @@ export interface TaskResponse {
   params: Record<string, unknown>;
   status: TaskStatus;
   progressPercent: number;
+  progressStep?: ProgressStep | null;
   fileProgress?: FileProgress[] | null;
+  downloadedBytes?: number | null;
+  totalBytes?: number | null;
+  speed?: string | null;
+  eta?: string | null;
+  elapsed?: number | null;
+  thumbnailPath?: string | null;
+  title?: string | null;
+  channel?: string | null;
+  duration?: number | null;
+  formatInfo?: FormatInfo[] | null;
+  currentIndex?: number | null;
+  totalItems?: number | null;
   createdAt: string;
   updatedAt?: string | null;
   completedAt?: string | null;

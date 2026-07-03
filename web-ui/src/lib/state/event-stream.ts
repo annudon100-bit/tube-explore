@@ -4,9 +4,9 @@ import type { TaskResponse } from '$lib/api/types';
 
 const _tasksMap = new Map<string, TaskResponse>();
 export const tasks = writable<TaskResponse[]>([]);
+export const sseConnected = writable<boolean>(false);
 
 let source: EventSource | null = null;
-let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 function sortTasks(list: TaskResponse[]): TaskResponse[] {
   return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -18,6 +18,7 @@ function updateTasks() {
 
 export function connectEventStream() {
   if (source) return;
+  sseConnected.set(false);
   source = new EventSource(`${API_BASE_URL}/api/events`);
 
   source.addEventListener('snapshot', (e: MessageEvent) => {
@@ -47,15 +48,17 @@ export function connectEventStream() {
     updateTasks();
   });
 
+  source.onopen = () => {
+    sseConnected.set(true);
+  };
+
   source.onerror = () => {
-    source?.close();
-    source = null;
-    reconnectTimer = setTimeout(connectEventStream, 3000);
+    sseConnected.set(false);
   };
 }
 
 export function disconnectEventStream() {
-  if (reconnectTimer) clearTimeout(reconnectTimer);
   source?.close();
   source = null;
+  sseConnected.set(false);
 }

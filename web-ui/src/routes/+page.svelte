@@ -10,14 +10,12 @@
   import SearchResults from '$lib/components/search/SearchResults.svelte';
   import MetadataResult from '$lib/components/search/MetadataResult.svelte';
   import PlaylistResult from '$lib/components/search/PlaylistResult.svelte';
-  import VideoDownloadDialog from '$lib/components/downloads/VideoDownloadDialog.svelte';
-  import PlaylistDownloadDialog from '$lib/components/downloads/PlaylistDownloadDialog.svelte';
+  import LiveVideoProgress from '$lib/components/downloads/live/LiveVideoProgress.svelte';
+  import LivePlaylistProgress from '$lib/components/downloads/live/LivePlaylistProgress.svelte';
   import TasksDialog from '$lib/components/tasks/TasksDialog.svelte';
   import TaskDetailDialog from '$lib/components/tasks/TaskDetailDialog.svelte';
   import FilesDialog from '$lib/components/files/FilesDialog.svelte';
   import ProfilesDialog from '$lib/components/profiles/ProfilesDialog.svelte';
-  import PresetsDialog from '$lib/components/presets/PresetsDialog.svelte';
-  import OutboxDialog from '$lib/components/outbox/OutboxDialog.svelte';
   import SettingsDialog from '$lib/components/settings/SettingsDialog.svelte';
   import HealthDialog from '$lib/components/settings/HealthDialog.svelte';
   import { searchMedia } from '$lib/api/search';
@@ -25,13 +23,11 @@
   import { getPlaylist } from '$lib/api/playlist';
   import { getHealth } from '$lib/api/health';
   import { listProfiles } from '$lib/api/profiles';
-  import { listPresets } from '$lib/api/presets';
-  import type { ConversionPresetResponse, HealthResponse, MetadataResponse, PlaylistResponse, ProfileResponse, SearchResponse, TaskResponse } from '$lib/api/types';
+  import type { HealthResponse, MetadataResponse, PlaylistResponse, ProfileResponse, SearchResponse, TaskResponse } from '$lib/api/types';
   import { connectEventStream, disconnectEventStream } from '$lib/state/event-stream';
 
   let health: HealthResponse | null = null;
   let profiles: ProfileResponse[] = [];
-  let presets: ConversionPresetResponse[] = [];
   let busy = false;
   let error: string | null = null;
   let dialog: string | null = null;
@@ -43,10 +39,9 @@
 
   async function refreshChrome() {
     try {
-      [health, profiles, presets] = await Promise.all([
+      [health, profiles] = await Promise.all([
         getHealth().catch(() => null),
-        listProfiles({ limit: 200, offset: 0 }).catch(() => []),
-        listPresets({ limit: 200, offset: 0 }).catch(() => [])
+        listProfiles({ limit: 200, offset: 0 }).catch(() => [])
       ]);
     } catch {
       // individual calls already guarded
@@ -119,18 +114,16 @@
 {/if}
 
 {#if dialog === 'videoDownload'}
-  <VideoDownloadDialog url={downloadUrl} {profiles} {presets} onClose={() => dialog = null} onCreated={refreshChrome} />
+  <LiveVideoProgress url={downloadUrl} {profiles} onClose={() => dialog = null} onCreated={refreshChrome} />
 {/if}
 
 {#if dialog === 'playlistDownload'}
-  <PlaylistDownloadDialog url={downloadUrl} {profiles} {presets} onClose={() => dialog = null} onCreated={refreshChrome} />
+  <LivePlaylistProgress url={downloadUrl} {profiles} onClose={() => dialog = null} onCreated={refreshChrome} />
 {/if}
 
 {#if dialog === 'tasks'}<TasksDialog onClose={() => { dialog = null; refreshChrome(); }} />{/if}
 {#if dialog === 'taskDetail' && selectedTask}<TaskDetailDialog task={selectedTask} onClose={() => { dialog = null; selectedTask = null; }} onChanged={refreshChrome} />{/if}
 {#if dialog === 'files'}<FilesDialog onClose={() => dialog = null} />{/if}
 {#if dialog === 'profiles'}<ProfilesDialog onClose={() => { dialog = null; refreshChrome(); }} />{/if}
-{#if dialog === 'presets'}<PresetsDialog onClose={() => { dialog = null; refreshChrome(); }} />{/if}
-{#if dialog === 'outbox'}<OutboxDialog onClose={() => dialog = null} />{/if}
 {#if dialog === 'settings'}<SettingsDialog onClose={() => { dialog = null; refreshChrome(); }} />{/if}
 {#if dialog === 'health'}<HealthDialog {health} onClose={() => { dialog = null; refreshChrome(); }} />{/if}

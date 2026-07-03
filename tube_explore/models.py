@@ -12,6 +12,11 @@ class FileProgress(BaseModel):
     speed: str | None = None
     eta: str | None = None
     status: str = "pending"
+    downloaded_bytes: int | None = None
+    total_bytes: int | None = None
+    channel: str | None = None
+    duration: int | None = None
+    format_info: str | None = None
 
 
 class QualityMode(StrEnum):
@@ -156,3 +161,17 @@ class TaskInfo(BaseModel):
     completed_at: datetime | None = None
     error: str | None = None
     result: Any = None
+
+    progress_step: str | None = None
+    downloaded_bytes: int | None = None
+    total_bytes: int | None = None
+    speed: str | None = None
+    eta: str | None = None
+    elapsed: int | None = None
+    thumbnail_path: str | None = None
+    title: str | None = None
+    channel: str | None = None
+    duration: int | None = None
+    format_info: list[dict] | None = None
+    current_index: int | None = None
+    total_items: int | None = None

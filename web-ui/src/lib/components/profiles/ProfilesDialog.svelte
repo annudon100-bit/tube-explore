@@ -28,7 +28,7 @@
       {#each profiles as profile}
         <div class="row">
           <div class="avatar">♙</div>
-          <div><div class="row-title">{profile.label || profile.name}</div><div class="row-sub">{profile.downloadQualityMode} · {profile.downloadDirectory || 'default directory'} · {profile.convertPreset || 'no conversion'}</div></div>
+          <div><div class="row-title">{profile.label || profile.name}</div><div class="row-sub">{profile.downloadQualityMode} · {profile.downloadDirectory || 'default directory'} · {profile.formatType}</div></div>
           <div style="display:flex; gap:8px; justify-content:flex-end"><button class="btn" on:click={() => editing = profile}>Edit</button><button class="btn red" on:click={() => confirmDelete = profile}>Delete</button></div>
         </div>
       {/each}

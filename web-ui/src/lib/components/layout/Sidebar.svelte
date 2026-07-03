@@ -9,8 +9,6 @@
     ['tasks', 'i-task', 'Tasks'],
     ['files', 'i-folder', 'Files'],
     ['profiles', 'i-user', 'Profiles'],
-    ['presets', 'i-sliders', 'Presets'],
-    ['outbox', 'i-box', 'Outbox'],
     ['settings', 'i-gear', 'Settings'],
     ['health', 'i-heart', 'Health'],
   ];

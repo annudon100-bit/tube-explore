@@ -24,7 +24,7 @@ venv/
 
 # Project data
 config/
-downloads/
+/downloads/
 outbox/
 *.db
 *.db-wal
@@ -42,6 +42,10 @@ yt-dlp
 .DS_Store
 Thumbs.db
 *.log
+
+# Dev artifacts
+ANALYZE_URL_RESEARCH.md
+mockup/
 
 # Docker
 .docker/

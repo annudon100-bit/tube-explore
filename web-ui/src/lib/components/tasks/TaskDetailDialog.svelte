@@ -4,6 +4,7 @@
   import ProgressBar from '$lib/components/shared/ProgressBar.svelte';
   import FileProgressRow from '$lib/components/shared/FileProgressRow.svelte';
   import ErrorMessage from '$lib/components/shared/ErrorMessage.svelte';
+  import StatsGrid from '$lib/components/downloads/live/StatsGrid.svelte';
   import { cancelTask, deleteTask, getTask, getTaskResult, retryTask } from '$lib/api/tasks';
   import { fileDownloadUrl } from '$lib/api/files';
   import { tasks } from '$lib/state/event-stream';
@@ -56,6 +57,19 @@
       </div>
       <ProgressBar value={current.progressPercent} />
     </div>
+
+    {#if current.status === 'running' || current.status === 'completed'}
+      <div class="panel card" style="box-shadow:none">
+        <StatsGrid
+          speed={current.speed}
+          eta={current.eta}
+          totalBytes={current.totalBytes}
+          downloadedBytes={current.downloadedBytes}
+          elapsed={current.elapsed}
+          step={current.progressStep}
+        />
+      </div>
+    {/if}
 
     {#if fileList.length > 1}
       <div class="panel card" style="box-shadow:none">

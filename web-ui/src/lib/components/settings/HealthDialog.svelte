@@ -23,7 +23,7 @@
       <div class="kv"><b>Download directory</b><span class={health.downloadDirectoryWritable ? 'ok' : 'bad'}>{health.downloadDirectoryWritable ? 'Writable' : 'Not writable'}</span></div>
       <div class="kv"><b>Temp directory</b><span class={health.tempDirectoryWritable ? 'ok' : 'bad'}>{health.tempDirectoryWritable ? 'Writable' : 'Not writable'}</span></div>
       <div class="kv"><b>Worker</b><span class={health.workerRunning ? 'ok' : 'bad'}>{health.workerRunning ? 'Running' : 'Stopped'}</span></div>
-      <div class="kv"><b>SSE connections</b><span>{health.activeSseConnections}</span></div>
+      <div class="kv"><b>SSE</b><span class={health.sseConnected ? 'ok' : 'bad'}>{health.sseConnected ? 'Connected' : 'Disconnected'}</span></div>
     </div>
     <div class="dialog-actions"><button class="btn" on:click={refresh}>Refresh</button><button class="btn primary" on:click={onClose}>Done</button></div>
   {/if}

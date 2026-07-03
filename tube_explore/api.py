@@ -11,12 +11,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
+logging.basicConfig(level=logging.INFO, force=True)
 logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+
+from fastapi.staticfiles import StaticFiles
 
 from tube_explore import config, db, ytdlp
 from tube_explore.models import Profile, ProfileCreate, ProfileUpdate, TaskInfo
@@ -196,21 +199,68 @@ def _update_task(tid: str, **kwargs):
         extra: dict[str, object] = {"updated_at": datetime.now(UTC)}
         if kwargs.get("status") in ("completed", "failed"):
             extra["completed_at"] = datetime.now(UTC)
-        task = task.model_copy(update=kwargs | extra)
+        new_kwargs = kwargs | extra
+        task = task.model_copy(update=new_kwargs)
         _tasks[tid] = task
         data = TaskResponse(**task.model_dump()).model_dump(mode="json", by_alias=True)
+    logger.info("_update_task: kwargs=%s data_speed=%s data_eta=%s data_totalBytes=%s", new_kwargs, data.get("speed"), data.get("eta"), data.get("totalBytes"))
     _broadcast("task_updated", data)
 
 
-def _run_in_background(tid: str, fn, *args, **kwargs):
+def _run_in_background(tid: str, fn, *args, url: str | None = None, metadata_fetched: dict | None = None, **kwargs):
+    """Run fn in a background thread with progress tracking.
+
+    If url is provided, metadata is pre-fetched (title, thumbnail, etc.)
+    and populated on the task before the download begins.
+    """
+
     def wrapper():
         _update_task(tid, status="running", progress_percent=0)
 
-        def _progress(percent: int, file_progress_list: list[dict] | None = None):
-            extra: dict[str, object] = {"progress_percent": percent}
+        # ── Pre-fetch metadata and cache thumbnail ─────────────
+        if url and not metadata_fetched:
+            try:
+                meta = ytdlp.get_metadata(url)
+                thumb_rel = ytdlp.cache_thumbnail(meta["id"], meta.get("thumbnail"))
+                meta_fields: dict[str, object] = {
+                    "title": meta.get("title"),
+                    "channel": meta.get("channel"),
+                    "duration": meta.get("duration"),
+                    "thumbnail_path": f"/api/{thumb_rel}" if thumb_rel else None,
+                }
+                if meta.get("formats"):
+                    meta_fields["format_info"] = meta["formats"]
+                _update_task(tid, **meta_fields)
+            except Exception as e:
+                logger.warning("Metadata pre-fetch failed for task %s: %s", tid, e)
+
+        # ── Progress callback ────────────────────────────────
+        _start_time = datetime.now(UTC)
+
+        def _progress(percent: int, file_progress_list: list[dict] | None = None, extra: dict | None = None):
+            nonlocal _start_time
+            elapsed = int((datetime.now(UTC) - _start_time).total_seconds())
+            update: dict[str, object] = {"progress_percent": percent, "elapsed": elapsed}
             if file_progress_list is not None:
-                extra["file_progress"] = file_progress_list
-            _update_task(tid, **extra)
+                update["file_progress"] = file_progress_list
+            if extra:
+                step = extra.get("step")
+                if step:
+                    update["progress_step"] = step
+                db_bytes = extra.get("downloaded_bytes")
+                if db_bytes is not None:
+                    update["downloaded_bytes"] = db_bytes
+                tb = extra.get("total_bytes")
+                if tb is not None:
+                    update["total_bytes"] = tb
+                spd = extra.get("speed")
+                if spd:
+                    update["speed"] = spd
+                eta_val = extra.get("eta")
+                if eta_val:
+                    update["eta"] = eta_val
+            logger.info("_progress: extra=%s update=%s", extra, update)
+            _update_task(tid, **update)
 
         kwargs["progress_callback"] = _progress
         try:
@@ -267,7 +317,7 @@ def _resolve_profile(profile_name: str | None, body_overrides) -> Profile:
             setattr(merged, attr, val)
 
     now = datetime.now(UTC)
-    return Profile(id=0, created_at=now, updated_at=now, **merged.model_dump())
+    return Profile(id=0, created_at=now, updated_at=now, **merged.model_dump(exclude_none=True))
 
 
 def _resolve_output_path(body, profile: Profile) -> str:
@@ -342,6 +392,7 @@ def download_video(body: DownloadVideoRequest):
     tid = _create_task("video", body.url, body.model_dump(by_alias=True))
     _run_in_background(
         tid, ytdlp.download_video, body.url,
+        url=body.url,
         output_dir=out, profile=profile, settings=settings,
         audio_only=body.audio_only,
         audio_format=body.audio_format.value if body.audio_format else None,
@@ -365,6 +416,7 @@ def download_playlist(body: DownloadPlaylistRequest):
     tid = _create_task("playlist", body.url, body.model_dump(by_alias=True))
     _run_in_background(
         tid, ytdlp.download_playlist, body.url,
+        url=body.url,
         output_dir=out, profile=profile, settings=settings,
         video_range=body.range,
         audio_only=body.audio_only,
@@ -455,6 +507,7 @@ def _re_run_task(task: TaskInfo) -> str:
         tid = _create_task("video", body.url, body.model_dump(by_alias=True))
         _run_in_background(
             tid, ytdlp.download_video, body.url,
+            url=body.url,
             output_dir=out, profile=profile, settings=settings,
             audio_only=body.audio_only,
             audio_format=body.audio_format.value if body.audio_format else None,
@@ -471,6 +524,7 @@ def _re_run_task(task: TaskInfo) -> str:
     tid = _create_task("playlist", pl_body.url, pl_body.model_dump(by_alias=True))
     _run_in_background(
         tid, ytdlp.download_playlist, pl_body.url,
+        url=pl_body.url,
         output_dir=out, profile=profile, settings=settings,
         video_range=pl_body.range,
         audio_only=pl_body.audio_only,
@@ -676,6 +730,12 @@ async def _http_exc(_request: Request, exc: HTTPException) -> JSONResponse:
     return JSONResponse(status_code=exc.status_code, content=ErrorResponse(detail=exc.detail).model_dump(by_alias=True))
 
 
+# ── Thumbnail serving ─────────────────────────────────────────
+_THUMBNAIL_DIR = os.path.join(config.get_metadata_dir(), "thumbnails")
+os.makedirs(_THUMBNAIL_DIR, exist_ok=True)
+app.mount("/api/thumbnails", StaticFiles(directory=_THUMBNAIL_DIR), name="thumbnails")
+
+
 # ── UI static file serving ────────────────────────────────────
 
 
@@ -684,8 +744,6 @@ _HAS_UI = UI_BUILD_DIR.is_dir()
 
 
 if _HAS_UI:
-    from fastapi.staticfiles import StaticFiles
-
     app.mount("/_app", StaticFiles(directory=str(UI_BUILD_DIR / "_app")), name="ui_assets")
 
     @app.get("/favicon.svg")

@@ -188,6 +188,11 @@ class FileProgress(BaseModel):
     speed: str | None = None
     eta: str | None = None
     status: str = "pending"
+    downloaded_bytes: int | None = Field(None, validation_alias="downloadedBytes")
+    total_bytes: int | None = Field(None, validation_alias="totalBytes")
+    channel: str | None = None
+    duration: int | None = None
+    format_info: list[FormatInfo] | None = Field(None, validation_alias="formatInfo")
 
 
 # ── Task ──────────────────────────────────────────────────────
@@ -210,6 +215,9 @@ class FileInfo(DownloadedFile):
     created_at: datetime = Field(..., description="When the file was downloaded")
 
 
+ProgressStep = Literal["fetching_metadata", "preparing", "downloading", "merging", "converting", "finalizing"]
+
+
 class TaskResponse(BaseModel):
     model_config = _CAMEL_CONFIG
 
@@ -219,12 +227,26 @@ class TaskResponse(BaseModel):
     params: dict[str, object] = {}
     status: Literal["pending", "running", "completed", "failed", "cancelled"] = "pending"
     progress_percent: int = Field(0, validation_alias="progressPercent")
+    progress_step: ProgressStep | None = Field(None, validation_alias="progressStep")
     file_progress: list[FileProgress] | None = Field(None, validation_alias="fileProgress")
     created_at: datetime
     updated_at: datetime | None = None
     completed_at: datetime | None = None
     error: str | None = None
     result: list[DownloadedFile] | None = None
+
+    downloaded_bytes: int | None = Field(None, validation_alias="downloadedBytes")
+    total_bytes: int | None = Field(None, validation_alias="totalBytes")
+    speed: str | None = None
+    eta: str | None = None
+    elapsed: int | None = None
+    thumbnail_path: str | None = Field(None, validation_alias="thumbnailPath")
+    title: str | None = None
+    channel: str | None = None
+    duration: int | None = None
+    format_info: list[FormatInfo] | None = Field(None, validation_alias="formatInfo")
+    current_index: int | None = Field(None, validation_alias="currentIndex")
+    total_items: int | None = Field(None, validation_alias="totalItems")
 
 
 class TaskResultResponse(BaseModel):
