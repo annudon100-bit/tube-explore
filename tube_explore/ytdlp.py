@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import urllib.error
@@ -13,6 +14,12 @@ from tube_explore import config, db
 from tube_explore.models import ConversionPreset, Profile, QualityMode, SettingsDict
 
 logger = logging.getLogger(__name__)
+
+# yt-dlp stderr progress regexes
+_PLAYLIST_PAT = re.compile(r"\[download\] Downloading video (\d+) of (\d+)")
+_PROGRESS_PAT = re.compile(r"\[download\]\s+([\d.]+)%")  # matches any [download] X.X% line
+_DEST_PAT = re.compile(r"\[download\] Destination:\s+(.+)")
+_COMPLETE_PAT = re.compile(r"\[download\]\s+100%")
 
 YTDLP_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -61,7 +68,17 @@ def ensure_binary() -> str:
         raise RuntimeError(f"Failed to download yt-dlp: {e}") from e
 
 
-def _run(args: list[str], timeout: int = 120, capture: bool = True) -> str | None:
+def _run(
+    args: list[str],
+    timeout: int = 120,
+    capture: bool = True,
+    progress_callback: Any | None = None,
+) -> str | None:
+    """Run yt-dlp. When capture=True, returns stdout (for metadata queries).
+    When capture=False, streams stderr line-by-line for progress parsing.
+    progress_callback(overall_percent: int, file_progress: list[dict]) is
+    called on each progress update.
+    """
     bin_path = ensure_binary()
     cmd = [bin_path, "--no-warnings"] + args
     if capture:
@@ -75,11 +92,96 @@ def _run(args: list[str], timeout: int = 120, capture: bool = True) -> str | Non
             err = result.stderr.strip() or result.stdout.strip()
             raise RuntimeError(err)
         return result.stdout
-    else:
-        ret = subprocess.run(cmd)
-        if ret.returncode != 0:
-            logger.warning("yt-dlp exited with code %d during download", ret.returncode)
-        return None
+
+    # ── Download mode: stream stderr and parse progress ──────
+    # file_progress state: list of dicts managed inside this function
+    fp_list: list[dict[str, Any]] = []
+    current_index = 0
+    fp_total = 1  # assumed for single video; updated from playlist context
+
+    def _ensure(idx: int) -> None:
+        while len(fp_list) <= idx:
+            fp_list.append({
+                "index": len(fp_list),
+                "title": None,
+                "percent": 0.0,
+                "speed": None,
+                "eta": None,
+                "status": "pending",
+            })
+
+    def _fire() -> None:
+        if not progress_callback:
+            return
+        # avoid division-by-zero; for 0 files report 0
+        total_pct = sum(f["percent"] for f in fp_list) / len(fp_list) if fp_list else 0.0
+        progress_callback(int(total_pct), [dict(f) for f in fp_list])
+
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    assert proc.stderr is not None
+    for raw_line in proc.stderr:
+        line = raw_line.rstrip("\n")
+        # playlist context — "Downloading video X of Y"
+        m = _PLAYLIST_PAT.search(line)
+        if m:
+            idx = int(m.group(1))
+            total = int(m.group(2))
+            fp_total = total
+            current_index = idx - 1
+            _ensure(total - 1)
+            fp_list[current_index]["status"] = "downloading"
+            _fire()
+            continue
+
+        # destination line — "Destination: filepath"
+        m = _DEST_PAT.search(line)
+        if m:
+            title = m.group(1).strip()
+            _ensure(current_index)
+            fp_list[current_index]["title"] = title
+            _fire()
+            continue
+
+        # 100% complete line
+        if _COMPLETE_PAT.search(line):
+            _ensure(current_index)
+            fp_list[current_index]["percent"] = 100.0
+            fp_list[current_index]["status"] = "completed"
+            _fire()
+            continue
+
+        # progress line — "X.X%  of … at … ETA …"
+        m = _PROGRESS_PAT.search(line)
+        if m:
+            pct = float(m.group(1))
+            speed: str | None = None
+            eta: str | None = None
+            # extract speed & ETA if present
+            if " at " in line and " ETA " in line:
+                try:
+                    after_pct = line.split("%", 1)[1]
+                    at_part = after_pct.split(" at ", 1)[1] if " at " in after_pct else ""
+                    speed = at_part.split(" ETA ")[0].strip() if " ETA " in at_part else None
+                    eta = at_part.split(" ETA ")[1].strip() if " ETA " in at_part else None
+                except (IndexError, ValueError):
+                    pass
+            _ensure(current_index)
+            fp_list[current_index]["percent"] = pct
+            fp_list[current_index]["speed"] = speed
+            fp_list[current_index]["eta"] = eta
+            fp_list[current_index]["status"] = "downloading"
+            _fire()
+
+    proc.wait()
+    if proc.returncode != 0:
+        logger.warning("yt-dlp exited with code %d during download", proc.returncode)
+    return None
 
 
 # ── Profile → format-string helpers ──────────────────────────
@@ -341,6 +443,7 @@ def _download_with_profile(
     audio_only: bool = False,
     conversion_preset: ConversionPreset | None = None,
     task_id: str | None = None,
+    progress_callback: Any | None = None,
 ) -> dict[str, Any]:
     temp_dir = settings.temp_directory.strip()
     final_dir = output_dir
@@ -364,8 +467,8 @@ def _download_with_profile(
     if video_range:
         args.insert(0, f"--playlist-items={video_range}")
 
-    # ── Batch download ────────────────────────────────────
-    _run(args, capture=False)
+    # ── Batch download with progress ──────────────────────
+    _run(args, capture=False, progress_callback=progress_callback)
 
     # ── Per-file pipeline ─────────────────────────────────
     result: dict[str, Any] = {}
@@ -534,6 +637,7 @@ def download_video(
     audio_only: bool = False,
     conversion_preset: ConversionPreset | None = None,
     task_id: str | None = None,
+    progress_callback: Any | None = None,
 ) -> dict[str, Any]:
     if profile is None:
         profile = Profile(id=0, name="_adhoc", created_at=datetime.now(), updated_at=datetime.now())
@@ -541,7 +645,7 @@ def download_video(
         settings = SettingsDict()
 
     out = _resolve_dir(profile.download_directory, output_dir)
-    return _download_with_profile(url, out, profile, settings, is_playlist=False, audio_only=audio_only, conversion_preset=conversion_preset, task_id=task_id)
+    return _download_with_profile(url, out, profile, settings, is_playlist=False, audio_only=audio_only, conversion_preset=conversion_preset, task_id=task_id, progress_callback=progress_callback)
 
 
 def download_playlist(
@@ -553,6 +657,7 @@ def download_playlist(
     audio_only: bool = False,
     conversion_preset: ConversionPreset | None = None,
     task_id: str | None = None,
+    progress_callback: Any | None = None,
 ) -> dict[str, Any]:
     if profile is None:
         profile = Profile(id=0, name="_adhoc", created_at=datetime.now(), updated_at=datetime.now())
@@ -561,5 +666,5 @@ def download_playlist(
 
     out = _resolve_dir(profile.download_directory, output_dir)
     return _download_with_profile(
-        url, out, profile, settings, is_playlist=True, video_range=video_range, audio_only=audio_only, conversion_preset=conversion_preset, task_id=task_id
+        url, out, profile, settings, is_playlist=True, video_range=video_range, audio_only=audio_only, conversion_preset=conversion_preset, task_id=task_id, progress_callback=progress_callback
     )

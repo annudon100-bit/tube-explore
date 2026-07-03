@@ -14,16 +14,11 @@ WORKDIR /app
 # System deps (ffmpeg for conversion)
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 
-# Runtime dependencies
-RUN pip install --no-cache-dir "fastapi>=0.115" "uvicorn>=0.34" "pydantic>=2.0"
+# Pre-download yt-dlp binary (used via subprocess in ytdlp.py)
+ADD https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp /usr/local/bin/yt-dlp
+RUN chmod +x /usr/local/bin/yt-dlp
 
-# yt-dlp for media downloads
-RUN pip install --no-cache-dir yt-dlp
-
-# Dev dependencies (linting, type checking, testing)
-RUN pip install --no-cache-dir "pytest>=8.0" "httpx2>=2.0" "ruff>=0.11" "mypy>=1.15"
-
-# Copy and install the package itself
+# Copy and install the package itself (reads deps from pyproject.toml)
 COPY pyproject.toml ./
 COPY tube_explore/ tube_explore/
 COPY tests/ tests/

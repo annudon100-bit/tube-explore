@@ -1,4 +1,3 @@
-import { API_BASE_URL } from '$lib/config/env';
 import { apiRequest, qs } from './client';
 import type { DownloadTaskCreatedResponse, OkResponse, PageArgs, TaskResponse, TaskResultResponse } from './types';
 
@@ -26,6 +25,3 @@ export function deleteTask(taskId: string) {
   return apiRequest<OkResponse>(`/api/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
 }
 
-export function taskStreamUrl(taskId: string) {
-  return `${API_BASE_URL}/api/tasks/${encodeURIComponent(taskId)}/stream`;
-}

@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tube_explore import config, db
-from tube_explore.api import _create_task, _lock, _sub_lock, _subscribe, _subscribers, _tasks, _unsubscribe, app
+from tube_explore.api import _create_task, _lock, _global_sub_lock, _global_subscribers, _subscribe_global, _tasks, _unsubscribe_global, _broadcast, app
 from tube_explore.models import OutboxFileCreate
 
 client = TestClient(app)
@@ -437,28 +437,42 @@ def _clear_tasks():
         _tasks.clear()
 
 
-def test_sse_returns_404_for_nonexistent_task():
-    resp = client.get("/api/tasks/nonexistent/stream")
-    assert resp.status_code == 404
+def test_global_sse_subscribe_unsubscribe():
+    q = _subscribe_global()
+    with _global_sub_lock:
+        assert q in _global_subscribers
+    _unsubscribe_global(q)
+    with _global_sub_lock:
+        assert q not in _global_subscribers
 
 
-def test_sse_subscribe_unsubscribe():
-    _clear_tasks()
-    tid = _create_task("video", "https://x.com/v", {})
-    q = _subscribe(tid)
-    with _sub_lock:
-        assert tid in _subscribers
-        assert q in _subscribers[tid]
-    _unsubscribe(tid, q)
-    with _sub_lock:
-        assert not _subscribers.get(tid) or q not in _subscribers[tid]
+def test_global_sse_broadcast_delivers_to_queue():
+    import json
+    q = _subscribe_global()
+    _broadcast("test_event", {"msg": "hello"})
+    event, payload = q.get_nowait()
+    assert event == "test_event"
+    assert json.loads(payload)["msg"] == "hello"
+    _unsubscribe_global(q)
 
 
-def test_sse_publish_delivers_to_queue():
-    _clear_tasks()
-    tid = _create_task("video", "https://x.com/v", {})
-    q = _subscribe(tid)
-    q.put_nowait({"status": "running"})
-    data = q.get_nowait()
-    assert data["status"] == "running"
-    _unsubscribe(tid, q)
+def test_global_sse_multiple_subscribers():
+    import json
+    q1 = _subscribe_global()
+    q2 = _subscribe_global()
+    _broadcast("multi", {"n": 42})
+    ev1, payload1 = q1.get_nowait()
+    ev2, payload2 = q2.get_nowait()
+    assert ev1 == "multi"
+    assert ev2 == "multi"
+    assert json.loads(payload1) == {"n": 42}
+    assert json.loads(payload2) == {"n": 42}
+    _unsubscribe_global(q1)
+    _unsubscribe_global(q2)
+
+
+def test_global_sse_unsubscribed_receives_no_events():
+    q = _subscribe_global()
+    _unsubscribe_global(q)
+    _broadcast("lost", {"x": 1})
+    assert q.qsize() == 0

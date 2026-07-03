@@ -5,6 +5,15 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+class FileProgress(BaseModel):
+    index: int
+    title: str | None = None
+    percent: float = 0.0
+    speed: str | None = None
+    eta: str | None = None
+    status: str = "pending"
+
+
 class QualityMode(StrEnum):
     best = "best"
     least = "least"
@@ -210,6 +219,7 @@ class TaskInfo(BaseModel):
     params: dict[str, object] = {}
     status: str = "pending"
     progress_percent: int = 0
+    file_progress: list[dict[str, object]] = []
     created_at: datetime
     updated_at: datetime | None = None
     completed_at: datetime | None = None

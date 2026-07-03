@@ -1,12 +1,12 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import ModalFrame from '$lib/components/shared/ModalFrame.svelte';
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
   import ProgressBar from '$lib/components/shared/ProgressBar.svelte';
+  import FileProgressRow from '$lib/components/shared/FileProgressRow.svelte';
   import ErrorMessage from '$lib/components/shared/ErrorMessage.svelte';
   import { cancelTask, deleteTask, getTask, getTaskResult, retryTask } from '$lib/api/tasks';
   import { fileDownloadUrl } from '$lib/api/files';
-  import { connectTaskStream } from '$lib/state/task-stream';
+  import { tasks } from '$lib/state/event-stream';
   import { showToast } from '$lib/state/toast-state';
   import { bytes, dateTime } from '$lib/utils/format';
   import type { TaskResponse, TaskResultResponse } from '$lib/api/types';
@@ -17,9 +17,14 @@
   let current = task;
   let result: TaskResultResponse | null = null;
   let error: string | null = null;
-  let stopStream: (() => void) | null = null;
 
+  $: {
+    const updated = $tasks.find(t => t.id === current.id);
+    if (updated) current = updated;
+  }
   $: isPartiallyFailed = current.status === 'completed' && !!current.error;
+  $: fileList = current.fileProgress ?? [];
+  $: activeIdx = fileList.findIndex(f => f.status === 'downloading');
 
   async function refresh() {
     try { current = await getTask(current.id); } catch (e) { error = e instanceof Error ? e.message : 'Unable to refresh task'; }
@@ -36,15 +41,9 @@
   async function doDelete() {
     try { await deleteTask(current.id); showToast('Task deleted'); onChanged(); onClose(); } catch (e) { error = e instanceof Error ? e.message : 'Unable to delete'; }
   }
-
-  onMount(() => {
-    if (!['completed', 'failed', 'cancelled'].includes(current.status)) {
-      stopStream = connectTaskStream(current.id, (update) => current = update, () => {});
-    }
-  });
 </script>
 
-<ModalFrame title="Task details" onClose={() => { stopStream?.(); onClose(); }}>
+<ModalFrame title="Task details" onClose={onClose}>
   <ErrorMessage message={error} />
   <div class="grid" style="gap:16px">
     <div class="panel card" style="box-shadow:none">
@@ -57,6 +56,21 @@
       </div>
       <ProgressBar value={current.progressPercent} />
     </div>
+
+    {#if fileList.length > 1}
+      <div class="panel card" style="box-shadow:none">
+        <div class="card-header"><h3>Files ({fileList.length})</h3></div>
+        <div class="file-tree">
+          {#each fileList as file, i}
+            <FileProgressRow {file} isActive={i === activeIdx} />
+          {/each}
+        </div>
+      </div>
+    {:else if fileList.length === 1 && fileList[0].title}
+      <div class="file-tree">
+        <FileProgressRow file={fileList[0]} isActive={fileList[0].status === 'downloading'} />
+      </div>
+    {/if}
 
     <div class="kv"><b>URL</b><span>{current.url}</span></div>
     <div class="kv"><b>Created</b><span>{dateTime(current.createdAt)}</span></div>
@@ -88,3 +102,11 @@
     {/if}
   </div>
 </ModalFrame>
+
+<style>
+  .file-tree {
+    display: grid;
+    gap: 4px;
+    margin-top: 6px;
+  }
+</style>

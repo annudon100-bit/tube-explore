@@ -114,7 +114,7 @@ class DownloadVideoRequest(BaseModel):
 
     url: str = Field(..., pattern=_URL_PATTERN, json_schema_extra=_URL_FORMAT, description="Media video URL")
     output_dir: str | None = Field(None, description="Relative subdirectory appended to the profile's download directory")
-    download_path_override: str | None = Field(None, alias="downloadPathOverride", description="Absolute path override for the final output destination. Ignores profile's download_directory. Must not resolve to a protected system directory. Returns 422 if the path traverses into /etc, /bin, /usr, /sys, /proc, /dev, /boot, /lib, /root, /var, /run, or similar system paths.")
+    download_path_override: str | None = Field(None, alias="downloadPathOverride", description="Relative subdirectory appended to the profile's download directory. Alternative to outputDir.")
     profile_id: str | None = Field(None, alias="profileId", description="Name of an existing profile to use")
     convert_preset: str | None = Field(None, description="Name of a conversion preset to apply")
     audio_only: bool = False
@@ -139,7 +139,7 @@ class DownloadPlaylistRequest(BaseModel):
 
     url: str = Field(..., pattern=_URL_PATTERN, json_schema_extra=_URL_FORMAT, description="Media playlist URL")
     output_dir: str | None = Field(None, description="Relative subdirectory appended to the profile's download directory")
-    download_path_override: str | None = Field(None, alias="downloadPathOverride", description="Absolute path override for the final output destination. Ignores profile's download_directory. Must not resolve to a protected system directory. Returns 422 if the path traverses into /etc, /bin, /usr, /sys, /proc, /dev, /boot, /lib, /root, /var, /run, or similar system paths.")
+    download_path_override: str | None = Field(None, alias="downloadPathOverride", description="Relative subdirectory appended to the profile's download directory. Alternative to outputDir.")
     profile_id: str | None = Field(None, alias="profileId", description="Name of an existing profile to use")
     range: str | None = Field(None, pattern=r"^\d+(-\d+)?$", description="Playlist item range, e.g. 1-5")
     convert_preset: str | None = Field(None, description="Name of a conversion preset to apply")
@@ -166,7 +166,20 @@ class DownloadTaskCreatedResponse(BaseModel):
     task_id: str = Field(..., description="Task ID for status polling")
     status: Literal["pending"] = Field("pending", description="Initial task status")
     status_url: str = Field(..., description="URL to poll task status")
-    stream_url: str = Field(..., description="URL to stream task status updates via SSE")
+
+
+# ── File Progress ──────────────────────────────────────────────
+
+
+class FileProgress(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    index: int
+    title: str | None = None
+    percent: float = 0.0
+    speed: str | None = None
+    eta: str | None = None
+    status: str = "pending"
 
 
 # ── Task ──────────────────────────────────────────────────────
@@ -198,6 +211,7 @@ class TaskResponse(BaseModel):
     params: dict[str, object] = {}
     status: Literal["pending", "running", "completed", "failed", "cancelled"] = "pending"
     progress_percent: int = Field(0, validation_alias="progressPercent")
+    file_progress: list[FileProgress] | None = Field(None, validation_alias="fileProgress")
     created_at: datetime
     updated_at: datetime | None = None
     completed_at: datetime | None = None
@@ -331,6 +345,7 @@ class HealthResponse(BaseModel):
     download_directory_writable: bool = Field(True, validation_alias="downloadDirectoryWritable")
     temp_directory_writable: bool = Field(True, validation_alias="tempDirectoryWritable")
     worker_running: bool = Field(False, validation_alias="workerRunning")
+    active_sse_connections: int = Field(0, validation_alias="activeSseConnections")
 
 
 # ── Outbox ────────────────────────────────────────────────────

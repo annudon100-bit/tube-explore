@@ -1,31 +1,22 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
   import ProgressBar from '$lib/components/shared/ProgressBar.svelte';
   import { dateTime } from '$lib/utils/format';
   import type { TaskResponse } from '$lib/api/types';
-  import { listTasks } from '$lib/api/tasks';
+  import { tasks } from '$lib/state/event-stream';
 
   export let onTask: (task: TaskResponse) => void = () => {};
   export let onViewAll: () => void = () => {};
 
-  let tasks: TaskResponse[] = [];
   let open = false;
   let container: HTMLDivElement;
 
-  $: activeCount = tasks.filter(t => ['pending', 'running', 'failed'].includes(t.status)).length;
-
-  async function refreshTasks() {
-    try {
-      tasks = await listTasks({ limit: 5, offset: 0 });
-    } catch {
-      // ignore
-    }
-  }
+  $: recent = $tasks.slice(0, 5);
+  $: activeCount = recent.filter(t => ['pending', 'running', 'failed'].includes(t.status)).length;
 
   function toggle() {
     open = !open;
-    if (open) refreshTasks();
   }
 
   function handleClickOutside(e: MouseEvent) {
@@ -36,7 +27,10 @@
 
   onMount(() => {
     document.addEventListener('click', handleClickOutside);
-    return () => document.removeEventListener('click', handleClickOutside);
+  });
+
+  onDestroy(() => {
+    document.removeEventListener('click', handleClickOutside);
   });
 </script>
 
@@ -54,11 +48,11 @@
         <strong>Recent Activity</strong>
         <button class="link-btn" type="button" on:click={() => { open = false; onViewAll(); }}>View all</button>
       </div>
-      {#if tasks.length === 0}
+      {#if recent.length === 0}
         <div class="empty">No tasks yet.</div>
       {:else}
         <div class="dropdown-list">
-          {#each tasks as task}
+          {#each recent as task}
             <button class="row clickable" type="button" on:click={() => { open = false; onTask(task); }}>
               <div class="avatar">{task.type === 'playlist' ? '♫' : '▶'}</div>
               <div>

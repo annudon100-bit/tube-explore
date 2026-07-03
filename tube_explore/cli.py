@@ -47,17 +47,12 @@ def cmd_download(args):
             return
         profile = p
 
-    out = None
-    if args.download_path_override:
-        out = args.download_path_override
-    elif profile and args.output:
-        out = os.path.join(profile.download_directory or os.getcwd(), args.output)
-    elif args.output:
-        out = args.output
-    elif profile and profile.download_directory:
-        out = profile.download_directory
+    base = profile.download_directory if profile and profile.download_directory else os.getcwd()
+    sub = args.download_path_override or args.output
+    if sub:
+        out = os.path.join(base, sub)
     else:
-        out = os.getcwd()
+        out = base
 
     audio_only = args.audio_only
 
@@ -295,8 +290,8 @@ def main():
 
     p_dl = sub.add_parser("download", help="Download video or playlist")
     p_dl.add_argument("url")
-    p_dl.add_argument("--output", "-o", help="Relative subdirectory appended to profile's download directory")
-    p_dl.add_argument("--download-path-override", help="Absolute path override, ignores profile download_directory")
+    p_dl.add_argument("--output", "-o", help="Relative subdirectory appended to the base download directory")
+    p_dl.add_argument("--download-path-override", help="Relative subdirectory appended to the base download directory (alternative to --output)")
     p_dl.add_argument("--profile", "-p", help="Profile name")
     p_dl.add_argument("--format", "-f", help="Format string")
     p_dl.add_argument("--convert-preset", help="Conversion preset name")

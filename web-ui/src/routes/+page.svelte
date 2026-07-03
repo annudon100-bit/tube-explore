@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import AppShell from '$lib/components/layout/AppShell.svelte';
   import HeroActionPanel from '$lib/components/home/HeroActionPanel.svelte';
   import QuickManageCards from '$lib/components/home/QuickManageCards.svelte';
@@ -27,6 +27,7 @@
   import { listProfiles } from '$lib/api/profiles';
   import { listPresets } from '$lib/api/presets';
   import type { ConversionPresetResponse, HealthResponse, MetadataResponse, PlaylistResponse, ProfileResponse, SearchResponse, TaskResponse } from '$lib/api/types';
+  import { connectEventStream, disconnectEventStream } from '$lib/state/event-stream';
 
   let health: HealthResponse | null = null;
   let profiles: ProfileResponse[] = [];
@@ -63,7 +64,12 @@
   function handleTask(task: TaskResponse) { selectedTask = task; dialog = 'taskDetail'; }
   function handleViewAll() { dialog = 'tasks'; }
 
-  onMount(refreshChrome);
+  onMount(() => {
+    refreshChrome();
+    connectEventStream();
+  });
+
+  onDestroy(disconnectEventStream);
 </script>
 
 <Icons />

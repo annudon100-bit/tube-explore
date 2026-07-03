@@ -153,38 +153,40 @@ _tasks: dict[str, TaskInfo] = {}
 _lock = threading.Lock()
 
 
-# ── SSE event bus ────────────────────────────────────────────
+# ── Global SSE event bus ─────────────────────────────────────
 _main_loop: asyncio.AbstractEventLoop | None = None
-_subscribers: dict[str, set[asyncio.Queue]] = {}
-_sub_lock = threading.Lock()
+_global_subscribers: set[asyncio.Queue] = set()
+_global_sub_lock = threading.Lock()
 
 
-def _subscribe(tid: str) -> asyncio.Queue:
+def _subscribe_global() -> asyncio.Queue:
     q: asyncio.Queue = asyncio.Queue()
-    with _sub_lock:
-        _subscribers.setdefault(tid, set()).add(q)
+    with _global_sub_lock:
+        _global_subscribers.add(q)
     return q
 
 
-def _unsubscribe(tid: str, q: asyncio.Queue) -> None:
-    with _sub_lock:
-        s = _subscribers.get(tid)
-        if s:
-            s.discard(q)
-            if not s:
-                _subscribers.pop(tid, None)
+def _unsubscribe_global(q: asyncio.Queue) -> None:
+    with _global_sub_lock:
+        _global_subscribers.discard(q)
 
 
-def _publish(tid: str, data: dict) -> None:
-    with _sub_lock:
-        queues = set(_subscribers.get(tid, []))
+def _active_sse_connections() -> int:
+    with _global_sub_lock:
+        return len(_global_subscribers)
+
+
+def _broadcast(event: str, data: dict) -> None:
+    with _global_sub_lock:
+        queues = list(_global_subscribers)
     if not queues:
         return
+    payload = json.dumps(data)
     for q in queues:
         if _main_loop and _main_loop.is_running():
-            _main_loop.call_soon_threadsafe(q.put_nowait, data)
+            _main_loop.call_soon_threadsafe(q.put_nowait, (event, payload))
         else:
-            q.put_nowait(data)
+            q.put_nowait((event, payload))
 
 
 def _create_task(task_type: str, url: str, params: dict[str, object]) -> str:
@@ -203,6 +205,7 @@ def _create_task(task_type: str, url: str, params: dict[str, object]) -> str:
     )
     with _lock:
         _tasks[tid] = task
+    _broadcast("task_created", task.model_dump(mode="json"))
     return tid
 
 
@@ -217,12 +220,20 @@ def _update_task(tid: str, **kwargs):
         task = task.model_copy(update=kwargs | extra)
         _tasks[tid] = task
         data = task.model_dump(mode="json")
-    _publish(tid, data)
+    _broadcast("task_updated", data)
 
 
 def _run_in_background(tid: str, fn, *args, **kwargs):
     def wrapper():
         _update_task(tid, status="running", progress_percent=50)
+
+        def _progress(percent: int, file_progress_list: list[dict] | None = None):
+            extra: dict[str, object] = {"progress_percent": percent}
+            if file_progress_list is not None:
+                extra["file_progress"] = file_progress_list
+            _update_task(tid, **extra)
+
+        kwargs["progress_callback"] = _progress
         try:
             result = fn(*args, **kwargs)
             if not result:
@@ -246,20 +257,6 @@ def _run_in_background(tid: str, fn, *args, **kwargs):
 
 
 # ── Helpers ──────────────────────────────────────────────────
-
-
-_PROTECTED_PATHS = frozenset({
-    "/etc", "/bin", "/sbin", "/usr", "/sys", "/proc", "/dev",
-    "/boot", "/lib", "/lib64", "/root", "/var", "/run", "/opt", "/snap",
-})
-
-
-def _validate_output_path(path: str) -> str:
-    resolved = os.path.realpath(path)
-    for protected in _PROTECTED_PATHS:
-        if resolved == protected or resolved.startswith(protected + "/"):
-            raise HTTPException(422, f"Output path '{path}' resolves to protected system directory '{resolved}'")
-    return resolved
 
 
 def _resolve_profile(profile_name: str | None, body_overrides) -> Profile:
@@ -291,11 +288,10 @@ def _resolve_convert_preset(body) -> ConversionPreset | None:
 
 
 def _resolve_output_path(body, profile: Profile) -> str:
-    if getattr(body, "download_path_override", None):
-        return _validate_output_path(body.download_path_override)
     base = profile.download_directory or os.getcwd()
-    if getattr(body, "output_dir", None):
-        return os.path.join(base, body.output_dir)
+    sub = getattr(body, "download_path_override", None) or getattr(body, "output_dir", None)
+    if sub:
+        return os.path.join(base, sub)
     return base
 
 
@@ -373,7 +369,7 @@ def download_video(body: DownloadVideoRequest):
     _run_in_background(
         tid, ytdlp.download_video, body.url, output_dir=out, profile=profile, settings=gs, audio_only=body.audio_only, conversion_preset=conversion_preset, task_id=tid
     )
-    return DownloadTaskCreatedResponse(task_id=tid, status="pending", status_url=f"/api/tasks/{tid}", stream_url=f"/api/tasks/{tid}/stream")
+    return DownloadTaskCreatedResponse(task_id=tid, status="pending", status_url=f"/api/tasks/{tid}")
 
 
 @app.post("/api/download/playlist", response_model=DownloadTaskCreatedResponse, status_code=202, responses={**_404, **_500, **_503}, summary="Download playlist", description="Start a background task to download all videos in a playlist. Supports optional index range filtering, audio-only mode, and a conversion preset. Returns a task ID for status polling.", tags=["Downloads"])
@@ -396,7 +392,7 @@ def download_playlist(body: DownloadPlaylistRequest):
         conversion_preset=conversion_preset,
         task_id=tid,
     )
-    return DownloadTaskCreatedResponse(task_id=tid, status="pending", status_url=f"/api/tasks/{tid}", stream_url=f"/api/tasks/{tid}/stream")
+    return DownloadTaskCreatedResponse(task_id=tid, status="pending", status_url=f"/api/tasks/{tid}")
 
 
 # ── Tasks ────────────────────────────────────────────────────
@@ -418,28 +414,25 @@ def list_tasks(limit: int = Query(50, ge=1, le=200, description="Maximum number 
     return items[offset:][:limit]
 
 
-@app.get("/api/tasks/{task_id}/stream", responses=_404, summary="Task status SSE stream", description="Subscribe to real-time status updates for a background task. Sends the current state immediately, then pushes updates until the task completes or fails. Sends keepalive every 30s.", tags=["Tasks"])
-async def task_stream(task_id: str):
-    with _lock:
-        task = _tasks.get(task_id)
-    if not task:
-        raise HTTPException(404, "Task not found")
-
-    q = _subscribe(task_id)
+@app.get("/api/events", summary="Global event stream", description="Persistent SSE connection that streams all task lifecycle events: snapshot, task_created, task_updated, task_deleted. Sends keepalive every 30s.", tags=["Tasks"])
+async def event_stream():
+    q = _subscribe_global()
 
     async def event_gen():
         try:
-            yield f"event: update\ndata: {task.model_dump_json()}\n\n"
+            # initial snapshot
+            with _lock:
+                tasks_data = [t.model_dump(mode="json") for t in _tasks.values()]
+            yield f"event: snapshot\ndata: {json.dumps({'tasks': tasks_data})}\n\n"
             while True:
-                data = await asyncio.wait_for(q.get(), timeout=30)
-                yield f"event: update\ndata: {json.dumps(data)}\n\n"
-                if data.get("status") in ("completed", "failed"):
-                    yield "event: done\ndata: {}\n\n"
-                    return
-        except TimeoutError:
-            yield "event: keepalive\ndata: {}\n\n"
+                try:
+                    event, payload = await asyncio.wait_for(q.get(), timeout=30)
+                except TimeoutError:
+                    yield "event: keepalive\ndata: {}\n\n"
+                    continue
+                yield f"event: {event}\ndata: {payload}\n\n"
         finally:
-            _unsubscribe(task_id, q)
+            _unsubscribe_global(q)
 
     return StreamingResponse(event_gen(), media_type="text/event-stream")
 
@@ -505,7 +498,7 @@ def retry_task(task_id: str):
     if task.status == "completed" and not task.error:
         raise HTTPException(409, "Task completed successfully with no errors; nothing to retry")
     tid = _re_run_task(task)
-    return DownloadTaskCreatedResponse(task_id=tid, status="pending", status_url=f"/api/tasks/{tid}", stream_url=f"/api/tasks/{tid}/stream")
+    return DownloadTaskCreatedResponse(task_id=tid, status="pending", status_url=f"/api/tasks/{tid}")
 
 
 @app.delete("/api/tasks/{task_id}", response_model=OkResponse, responses=_404_409, summary="Delete task", description="Remove a completed, failed, or cancelled task from memory.", tags=["Tasks"])
@@ -517,6 +510,7 @@ def delete_task(task_id: str):
         if task.status in ("pending", "running"):
             raise HTTPException(409, f"Cannot delete task in status '{task.status}'")
         del _tasks[task_id]
+    _broadcast("task_deleted", {"id": task_id})
     return OkResponse(ok=True)
 
 
@@ -607,6 +601,7 @@ def health():
         download_directory_writable=os.access(config_dir, os.W_OK),
         temp_directory_writable=os.access(temp_dir, os.W_OK),
         worker_running=worker_running,
+        active_sse_connections=_active_sse_connections(),
     )
 
 

@@ -68,9 +68,17 @@ export interface DownloadRequestBase {
 }
 export interface DownloadVideoRequest extends DownloadRequestBase {}
 export interface DownloadPlaylistRequest extends DownloadRequestBase { range?: string | null; }
-export interface DownloadTaskCreatedResponse { taskId: string; status: 'pending'; statusUrl: string; streamUrl: string; }
+export interface DownloadTaskCreatedResponse { taskId: string; status: 'pending'; statusUrl: string; }
 
 export interface DownloadedFile { id?: string; name: string; size: number; path: string; }
+export interface FileProgress {
+  index: number;
+  title?: string | null;
+  percent: number;
+  speed?: string | null;
+  eta?: string | null;
+  status: string;
+}
 export interface TaskResponse {
   id: string;
   type: TaskType;
@@ -78,6 +86,7 @@ export interface TaskResponse {
   params: Record<string, unknown>;
   status: TaskStatus;
   progressPercent: number;
+  fileProgress?: FileProgress[] | null;
   createdAt: string;
   updatedAt?: string | null;
   completedAt?: string | null;
@@ -167,6 +176,7 @@ export interface HealthResponse {
   downloadDirectoryWritable: boolean;
   tempDirectoryWritable: boolean;
   workerRunning: boolean;
+  activeSseConnections: number;
 }
 
 export interface OutboxEntry {
