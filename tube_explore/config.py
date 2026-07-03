@@ -1,7 +1,7 @@
 import os
 
 DEFAULT_CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config")
-DEFAULT_OUTBOX_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "outbox")
+DEFAULT_DOWNLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "downloads")
 
 
 def get_config_dir() -> str:
@@ -12,5 +12,5 @@ def get_db_path() -> str:
     return os.path.join(get_config_dir(), "tube_explore.db")
 
 
-def get_outbox_dir() -> str:
-    return os.environ.get("OUTBOX_DIRECTORY", DEFAULT_OUTBOX_DIR)
+def get_download_dir() -> str:
+    return os.environ.get("DOWNLOAD_DIRECTORY", DEFAULT_DOWNLOAD_DIR)

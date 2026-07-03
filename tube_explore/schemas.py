@@ -4,7 +4,7 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from tube_explore.models import AudioCodec, Container, OutputExt, QualityMode, VideoCodec
+from tube_explore.models import AudioFormat, FormatType, QualityMode
 
 
 def _to_camel(string: str) -> str:
@@ -116,12 +116,15 @@ class DownloadVideoRequest(BaseModel):
     output_dir: str | None = Field(None, description="Relative subdirectory appended to the profile's download directory")
     download_path_override: str | None = Field(None, alias="downloadPathOverride", description="Relative subdirectory appended to the profile's download directory. Alternative to outputDir.")
     profile_id: str | None = Field(None, alias="profileId", description="Name of an existing profile to use")
-    convert_preset: str | None = Field(None, description="Name of a conversion preset to apply")
     audio_only: bool = False
+    audio_format: AudioFormat | None = None
+    audio_quality: str | None = None
+    remux_to: str | None = None
 
     download_quality_mode: QualityMode | None = None
     download_quality_value: int | None = None
     download_format: str | None = None
+    format_type: FormatType | None = None
     embed_metadata: bool | None = None
     embed_thumbnail: bool | None = None
     subtitles: bool | None = None
@@ -139,15 +142,20 @@ class DownloadPlaylistRequest(BaseModel):
 
     url: str = Field(..., pattern=_URL_PATTERN, json_schema_extra=_URL_FORMAT, description="Media playlist URL")
     output_dir: str | None = Field(None, description="Relative subdirectory appended to the profile's download directory")
-    download_path_override: str | None = Field(None, alias="downloadPathOverride", description="Relative subdirectory appended to the profile's download directory. Alternative to outputDir.")
+    download_path_override: str | None = Field(None, alias="downloadPathOverride", description="Overrides all path segments except the download base directory")
+    playlist_directory: str | None = Field(None, alias="playlistDirectory", description="Relative subdirectory appended to output dir for playlist grouping")
+    include_playlist_dir: bool = Field(True, alias="includePlaylistDir", description="When True, %(playlist_title)s is appended to the output template")
     profile_id: str | None = Field(None, alias="profileId", description="Name of an existing profile to use")
     range: str | None = Field(None, pattern=r"^\d+(-\d+)?$", description="Playlist item range, e.g. 1-5")
-    convert_preset: str | None = Field(None, description="Name of a conversion preset to apply")
     audio_only: bool = False
+    audio_format: AudioFormat | None = None
+    audio_quality: str | None = None
+    remux_to: str | None = None
 
     download_quality_mode: QualityMode | None = None
     download_quality_value: int | None = None
     download_format: str | None = None
+    format_type: FormatType | None = None
     embed_metadata: bool | None = None
     embed_thumbnail: bool | None = None
     subtitles: bool | None = None
@@ -239,10 +247,11 @@ class ProfileCreateRequest(BaseModel):
     download_format: str | None = None
     download_quality_mode: QualityMode = QualityMode.best
     download_quality_value: int | None = None
-    convert_preset: str | None = None
-    convert_format: str | None = None
-    convert_quality_mode: QualityMode = QualityMode.best
-    convert_quality_value: int | None = None
+    format_type: FormatType = FormatType.video_audio
+    audio_format: AudioFormat | None = None
+    audio_quality: str | None = None
+    remux_to: str | None = None
+    include_playlist_dir: bool = True
     filename_template: str | None = None
     playlist_template: str | None = None
     embed_metadata: bool = True
@@ -253,7 +262,6 @@ class ProfileCreateRequest(BaseModel):
     @model_validator(mode="after")
     def _check_quality_values(self) -> Self:
         _validate_quality_mode(self.download_quality_mode, self.download_quality_value)
-        _validate_quality_mode(self.convert_quality_mode, self.convert_quality_value)
         return self
 
 
@@ -266,12 +274,13 @@ class ProfileUpdateRequest(BaseModel):
     download_format: str | None = None
     download_quality_mode: QualityMode | None = None
     download_quality_value: int | None = None
-    convert_preset: str | None = None
-    convert_format: str | None = None
-    convert_quality_mode: QualityMode | None = None
-    convert_quality_value: int | None = None
+    format_type: FormatType | None = None
+    audio_format: AudioFormat | None = None
+    audio_quality: str | None = None
+    remux_to: str | None = None
     filename_template: str | None = None
     playlist_template: str | None = None
+    include_playlist_dir: bool | None = None
     embed_metadata: bool | None = None
     embed_thumbnail: bool | None = None
     subtitles: bool | None = None
@@ -281,8 +290,6 @@ class ProfileUpdateRequest(BaseModel):
     def _check_quality_values(self) -> Self:
         if self.download_quality_mode is not None:
             _validate_quality_mode(self.download_quality_mode, self.download_quality_value)
-        if self.convert_quality_mode is not None:
-            _validate_quality_mode(self.convert_quality_mode, self.convert_quality_value)
         return self
 
 
@@ -296,10 +303,11 @@ class ProfileResponse(BaseModel):
     download_format: str | None = None
     download_quality_mode: QualityMode = QualityMode.best
     download_quality_value: int | None = None
-    convert_preset: str | None = None
-    convert_format: str | None = None
-    convert_quality_mode: QualityMode = QualityMode.best
-    convert_quality_value: int | None = None
+    format_type: FormatType = FormatType.video_audio
+    audio_format: AudioFormat | None = None
+    audio_quality: str | None = None
+    remux_to: str | None = None
+    include_playlist_dir: bool = True
     filename_template: str = "%(title)s [%(id)s].%(ext)s"
     playlist_template: str = "%(playlist_title)s/%(playlist_index)02d - %(title)s [%(id)s].%(ext)s"
     embed_metadata: bool = True
@@ -345,34 +353,7 @@ class HealthResponse(BaseModel):
     download_directory_writable: bool = Field(True, validation_alias="downloadDirectoryWritable")
     temp_directory_writable: bool = Field(True, validation_alias="tempDirectoryWritable")
     worker_running: bool = Field(False, validation_alias="workerRunning")
-    active_sse_connections: int = Field(0, validation_alias="activeSseConnections")
-
-
-# ── Outbox ────────────────────────────────────────────────────
-
-
-class OutboxEntry(BaseModel):
-    model_config = _CAMEL_CONFIG
-
-    id: str = Field(..., description="Unique file identifier")
-    name: str = Field(..., description="File name")
-    size: int = Field(..., description="File size in bytes")
-    media_url: str | None = Field(None, description="Source media URL", json_schema_extra=_URL_FORMAT)
-    task_id: str | None = Field(None, description="Download task ID")
-    quality_mode: str | None = Field(None, description="Quality mode used for download")
-    quality_value: int | None = Field(None, description="Quality value used for download")
-    convert_preset: str | None = Field(None, description="Conversion preset attempted")
-    status: Literal["pending", "processing", "completed", "failed"] = Field("pending", description="Processing status (pending, processing, completed, failed)")
-    error: str | None = Field(None, description="Error message if processing failed")
-    created_at: datetime = Field(..., description="When the file was added to outbox")
-    updated_at: datetime | None = Field(None, description="When the record was last updated")
-
-
-class OutboxProcessRequest(BaseModel):
-    model_config = _CAMEL_CONFIG
-
-    preset: str = Field(..., description="Conversion preset name to apply")
-    download_directory: str | None = Field(None, alias="downloadDirectory", description="Directory to place the converted file. Defaults to current working directory.")
+    sse_connected: bool = Field(False, validation_alias="sseConnected")
 
 
 # ── Generic ───────────────────────────────────────────────────
@@ -388,69 +369,3 @@ class OkResponse(BaseModel):
     model_config = _CAMEL_CONFIG
 
     ok: bool = True
-
-
-# ── Conversion Presets ───────────────────────────────────────
-
-
-class ConversionPresetCreateRequest(BaseModel):
-    model_config = _CAMEL_CONFIG
-
-    name: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_ -]+$", description="Unique preset name")
-    label: str | None = None
-    container: Container = Field(..., description="Output container")
-    video_codec: VideoCodec | None = Field(None, description="Video codec")
-    video_bitrate: str | None = Field(None, pattern=r"^\d+(\.\d+)?[kMG]?$", description="Video bitrate (e.g. 5M)")
-    video_fps: float | None = Field(None, description="Video framerate")
-    video_preset: str | None = Field(None, description="ffmpeg encoding preset (slow, medium, fast)")
-    video_pixfmt: str | None = Field(None, description="Pixel format (yuv420p, yuv444p10le)")
-    audio_codec: AudioCodec | None = Field(None, description="Audio codec")
-    audio_bitrate: str | None = Field(None, pattern=r"^\d+(\.\d+)?[kMG]?$", description="Audio bitrate (e.g. 128k)")
-    audio_samplerate: int | None = Field(None, description="Audio sample rate in Hz")
-    audio_channels: int | None = Field(None, description="Number of audio channels")
-    max_width: int | None = Field(None, description="Max output width (pixels)")
-    max_height: int | None = Field(None, description="Max output height (pixels)")
-    output_ext: OutputExt = Field(..., description="Output file extension")
-
-
-class ConversionPresetUpdateRequest(BaseModel):
-    model_config = _CAMEL_CONFIG
-
-    name: str | None = None
-    label: str | None = None
-    container: Container | None = None
-    video_codec: VideoCodec | None = None
-    video_bitrate: str | None = None
-    video_fps: float | None = None
-    video_preset: str | None = None
-    video_pixfmt: str | None = None
-    audio_codec: AudioCodec | None = None
-    audio_bitrate: str | None = None
-    audio_samplerate: int | None = None
-    audio_channels: int | None = None
-    max_width: int | None = None
-    max_height: int | None = None
-    output_ext: OutputExt | None = None
-
-
-class ConversionPresetResponse(BaseModel):
-    model_config = _CAMEL_CONFIG
-
-    id: int
-    name: str
-    label: str = ""
-    container: Container
-    video_codec: VideoCodec | None = None
-    video_bitrate: str | None = None
-    video_fps: float | None = None
-    video_preset: str | None = None
-    video_pixfmt: str | None = None
-    audio_codec: AudioCodec | None = None
-    audio_bitrate: str | None = None
-    audio_samplerate: int | None = None
-    audio_channels: int | None = None
-    max_width: int | None = None
-    max_height: int | None = None
-    output_ext: OutputExt
-    created_at: datetime
-    updated_at: datetime

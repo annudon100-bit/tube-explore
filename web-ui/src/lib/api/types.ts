@@ -1,11 +1,8 @@
 export type QualityMode = 'best' | 'least' | 'at_most' | 'at_least';
 export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 export type TaskType = 'video' | 'playlist';
-export type OutboxStatus = 'pending' | 'processing' | 'completed' | 'failed';
-export type Container = 'mp4' | 'mkv' | 'webm' | 'mp3' | 'flac' | 'm4a' | 'opus' | 'wav' | 'mov' | 'avi';
-export type OutputExt = Container;
-export type VideoCodec = 'h264' | 'hevc' | 'av1' | 'vp9';
-export type AudioCodec = 'aac' | 'mp3' | 'opus' | 'flac' | 'vorbis';
+export type AudioFormat = 'best' | 'aac' | 'alac' | 'flac' | 'm4a' | 'mp3' | 'opus' | 'vorbis' | 'wav';
+export type FormatType = 'video+audio' | 'video-only' | 'audio-only';
 
 export interface ApiErrorPayload { detail?: string | ValidationError[]; }
 export interface ValidationError { loc: Array<string | number>; msg: string; type: string; input?: unknown; ctx?: Record<string, unknown>; }
@@ -56,18 +53,25 @@ export interface DownloadRequestBase {
   outputDir?: string | null;
   downloadPathOverride?: string | null;
   profileId?: string | null;
-  convertPreset?: string | null;
   audioOnly?: boolean;
+  audioFormat?: AudioFormat | null;
+  audioQuality?: string | null;
+  remuxTo?: string | null;
   downloadQualityMode?: QualityMode | null;
   downloadQualityValue?: number | null;
   downloadFormat?: string | null;
+  formatType?: FormatType | null;
   embedMetadata?: boolean | null;
   embedThumbnail?: boolean | null;
   subtitles?: boolean | null;
   subtitleLangs?: string | null;
 }
 export interface DownloadVideoRequest extends DownloadRequestBase {}
-export interface DownloadPlaylistRequest extends DownloadRequestBase { range?: string | null; }
+export interface DownloadPlaylistRequest extends DownloadRequestBase {
+  range?: string | null;
+  playlistDirectory?: string | null;
+  includePlaylistDir?: boolean;
+}
 export interface DownloadTaskCreatedResponse { taskId: string; status: 'pending'; statusUrl: string; }
 
 export interface DownloadedFile { id?: string; name: string; size: number; path: string; }
@@ -104,10 +108,11 @@ export interface ProfileBase {
   downloadFormat?: string | null;
   downloadQualityMode?: QualityMode | null;
   downloadQualityValue?: number | null;
-  convertPreset?: string | null;
-  convertFormat?: string | null;
-  convertQualityMode?: QualityMode | null;
-  convertQualityValue?: number | null;
+  formatType?: FormatType | null;
+  audioFormat?: AudioFormat | null;
+  audioQuality?: string | null;
+  remuxTo?: string | null;
+  includePlaylistDir?: boolean;
   filenameTemplate?: string | null;
   playlistTemplate?: string | null;
   embedMetadata?: boolean | null;
@@ -124,42 +129,17 @@ export interface ProfileResponse extends Required<Pick<ProfileCreateRequest, 'na
   downloadFormat?: string | null;
   downloadQualityMode: QualityMode;
   downloadQualityValue?: number | null;
-  convertPreset?: string | null;
-  convertFormat?: string | null;
-  convertQualityMode: QualityMode;
-  convertQualityValue?: number | null;
+  formatType: FormatType;
+  audioFormat?: AudioFormat | null;
+  audioQuality?: string | null;
+  remuxTo?: string | null;
+  includePlaylistDir: boolean;
   filenameTemplate: string;
   playlistTemplate: string;
   embedMetadata: boolean;
   embedThumbnail: boolean;
   subtitles: boolean;
   subtitleLangs?: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface ConversionPresetBase {
-  name?: string | null;
-  label?: string | null;
-  container?: Container | null;
-  videoCodec?: VideoCodec | null;
-  videoBitrate?: string | null;
-  videoFps?: number | null;
-  videoPreset?: string | null;
-  videoPixfmt?: string | null;
-  audioCodec?: AudioCodec | null;
-  audioBitrate?: string | null;
-  audioSamplerate?: number | null;
-  audioChannels?: number | null;
-  maxWidth?: number | null;
-  maxHeight?: number | null;
-  outputExt?: OutputExt | null;
-}
-export interface ConversionPresetCreateRequest extends ConversionPresetBase { name: string; container: Container; outputExt: OutputExt; }
-export interface ConversionPresetUpdateRequest extends ConversionPresetBase {}
-export interface ConversionPresetResponse extends ConversionPresetCreateRequest {
-  id: number;
-  label: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -176,23 +156,7 @@ export interface HealthResponse {
   downloadDirectoryWritable: boolean;
   tempDirectoryWritable: boolean;
   workerRunning: boolean;
-  activeSseConnections: number;
+  sseConnected: boolean;
 }
-
-export interface OutboxEntry {
-  id: string;
-  name: string;
-  size: number;
-  mediaUrl?: string | null;
-  taskId?: string | null;
-  qualityMode?: string | null;
-  qualityValue?: number | null;
-  convertPreset?: string | null;
-  status: OutboxStatus;
-  error?: string | null;
-  createdAt: string;
-  updatedAt?: string | null;
-}
-export interface OutboxProcessRequest { preset: string; downloadDirectory?: string | null; }
 
 export interface PageArgs { limit?: number; offset?: number; }
