@@ -7,6 +7,7 @@
   import ProgressBar from '$lib/components/shared/ProgressBar.svelte';
   import TaskDetailDialog from './TaskDetailDialog.svelte';
   import { listTasks } from '$lib/api/tasks';
+  import { API_BASE_URL } from '$lib/config/env';
   import type { TaskResponse } from '$lib/api/types';
 
   export let onClose: () => void = () => {};
@@ -31,7 +32,13 @@
     <div class="simple-list">
       {#each tasks as task}
         <button class="row clickable" type="button" on:click={() => selected = task}>
-          <div class="avatar">{task.type === 'playlist' ? '♫' : '▶'}</div>
+          <div class="avatar">
+            {#if task.thumbnailPath}
+              <img src={`${API_BASE_URL}${task.thumbnailPath}`} alt="" class="avatar-img" />
+            {:else}
+              {task.type === 'playlist' ? '♫' : '▶'}
+            {/if}
+          </div>
           <div><div class="row-title">{task.type} · {task.id}</div><div class="row-sub">{task.url}</div></div>
           <div style="display:grid; gap:8px; justify-items:end"><StatusBadge status={task.status} /><ProgressBar value={task.progressPercent} /></div>
         </button>

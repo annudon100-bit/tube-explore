@@ -11,6 +11,9 @@
 </script>
 
 <div class="file-row" class:active={isActive}>
+  {#if file.thumbnailUrl}
+    <img src={file.thumbnailUrl} alt="" class="file-thumb" />
+  {/if}
   <div class="row-main">
     <span class="status-icon" class:spin={file.status === 'downloading'}>{statusIcon}</span>
     <span class="file-title">{label}</span>
@@ -34,22 +37,31 @@
 <style>
   .file-row {
     display: grid;
-    grid-template-columns: 1fr auto;
+    grid-template-columns: auto 1fr auto;
     grid-template-rows: auto auto;
     gap: 2px 10px;
     padding: 6px 8px;
     border-radius: 6px;
     background: rgba(255,255,255,0.03);
     transition: background 0.15s;
+    align-items: center;
   }
   .file-row.active {
     background: rgba(139, 92, 246, 0.08);
+  }
+  .file-thumb {
+    width: 40px;
+    height: 24px;
+    border-radius: 4px;
+    object-fit: cover;
+    grid-row: 1 / 2;
   }
   .row-main {
     display: flex;
     align-items: center;
     gap: 6px;
     overflow: hidden;
+    grid-row: 1 / 2;
   }
   .status-icon {
     flex-shrink: 0;
@@ -77,6 +89,7 @@
     justify-self: end;
     font-size: 11px;
     color: var(--text-muted);
+    grid-row: 1 / 2;
   }
   .file-pct { font-variant-numeric: tabular-nums; }
   .file-speed { color: var(--accent); }

@@ -9,6 +9,7 @@ services:
     volumes:
       - ./downloads:/app/downloads
       - ./config:/app/config
+      - ../temp:/temp
 
 volumes:
   downloads:

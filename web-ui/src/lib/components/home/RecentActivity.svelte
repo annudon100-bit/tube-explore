@@ -3,6 +3,7 @@
   import { dateTime } from '$lib/utils/format';
   import ProgressBar from '$lib/components/shared/ProgressBar.svelte';
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+  import { API_BASE_URL } from '$lib/config/env';
 
   export let tasks: TaskResponse[] = [];
   export let onTask: (task: TaskResponse) => void = () => {};
@@ -20,7 +21,13 @@
     <div class="activity-list">
       {#each tasks.slice(0, 5) as task}
         <button class="row clickable" type="button" on:click={() => onTask(task)}>
-          <div class="avatar">{task.type === 'playlist' ? '♫' : '▶'}</div>
+          <div class="avatar">
+            {#if task.thumbnailPath}
+              <img src={`${API_BASE_URL}${task.thumbnailPath}`} alt="" class="avatar-img" />
+            {:else}
+              {task.type === 'playlist' ? '♫' : '▶'}
+            {/if}
+          </div>
           <div>
             <div class="row-title">{task.type === 'playlist' ? 'Playlist Download' : 'Video Download'}</div>
             <div class="row-sub">{task.url}</div>

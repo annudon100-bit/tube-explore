@@ -17,7 +17,7 @@ from tube_explore.models import AudioFormat, CodecPreference, FormatType, Profil
 logger = logging.getLogger(__name__)
 
 # yt-dlp stderr progress regexes
-_PLAYLIST_PAT = re.compile(r"\[download\] Downloading video (\d+) of (\d+)")
+_PLAYLIST_PAT = re.compile(r"\[download\] Downloading (?:video|item) (\d+) of (\d+)")
 _PROGRESS_PAT = re.compile(r"\[download\]\s+([\d.]+)%")
 _DEST_PAT = re.compile(r"\[download\] (?:Destination:\s+)?(/.+)")
 _COMPLETE_PAT = re.compile(r"\[download\]\s+100%")
@@ -28,7 +28,27 @@ _REMUX_PAT = re.compile(r"\[VideoRemuxer\] Remuxing")
 _DELETE_ORIG_PAT = re.compile(r"Deleting original file")
 _PLAYLIST_DL_PAT = re.compile(r"\[download\] Downloading playlist:")
 _PLAYLIST_ITEMS_PAT = re.compile(r"Downloading (\d+) items")
+_ALREADY_DL_PAT = re.compile(r"\[download\] (.+?) has already been downloaded")
 _TOTAL_BYTES_PAT = re.compile(r"of\s+([\d.]+)\s*([KMG]iB)")
+
+def _extract_title_from_path(filepath: str) -> str:
+    """Extract a clean video title from a yt-dlp output path.
+
+    Handles templates like:
+      /path/to/01 - Video Title [videoid].ext
+      /path/to/Video Title [videoid].f401.ext
+    Returns just the video title.
+    """
+    fn = os.path.basename(filepath)
+    name, _ = os.path.splitext(fn)
+    # Remove yt-dlp format specifier suffix (e.g. .f401, .f251)
+    name = re.sub(r"\.f\d+$", "", name)
+    # Remove trailing [videoId]
+    name = re.sub(r"\s*\[[^\]]*\]$", "", name)
+    # Remove leading playlist index
+    name = re.sub(r"^\d+ - ", "", name)
+    return name.strip()
+
 
 # Phase definitions with percentage ranges
 PHASES = [
@@ -186,6 +206,8 @@ def _run(
             "total_bytes": current_total_bytes,
             "speed": current_speed,
             "eta": current_eta,
+            "current_index": current_index,
+            "total_items": fp_total,
         }
 
     def _fire() -> None:
@@ -272,12 +294,21 @@ def _run(
                 _fire()
                 continue
 
+            # ── Already downloaded (skip) ────────────────────
+            m = _ALREADY_DL_PAT.search(line)
+            if m:
+                _ensure(current_index)
+                fp_list[current_index]["title"] = _extract_title_from_path(m.group(1))
+                fp_list[current_index]["percent"] = 100.0
+                fp_list[current_index]["status"] = "completed"
+                _fire()
+                continue
+
             # ── Destination (file path = file start) ─────────
             m = _DEST_PAT.search(line)
             if m:
-                title = m.group(1).strip()
                 _ensure(current_index)
-                fp_list[current_index]["title"] = title
+                fp_list[current_index]["title"] = _extract_title_from_path(m.group(1))
                 current_downloaded_bytes = 0
                 current_total_bytes = None
                 _set_phase("downloading")
@@ -576,11 +607,8 @@ def search_videos(query: str, limit: int = 10) -> list[dict[str, Any]]:
     return results
 
 
-def get_metadata(url: str) -> dict:
-    stdout = _run(["--dump-json", url], timeout=60)
-    assert stdout is not None
-    info = json.loads(stdout)
-    formats = []
+def _parse_video_formats(info: dict) -> list[dict[str, Any]]:
+    formats: list[dict[str, Any]] = []
     for f in info.get("formats", []):
         formats.append(
             {
@@ -596,11 +624,16 @@ def get_metadata(url: str) -> dict:
                 "fps": f.get("fps"),
             }
         )
+    return formats
+
+
+def _build_metadata(video_id: str, info: dict) -> dict:
+    formats = _parse_video_formats(info)
     heights = sorted(set(f["height"] for f in formats if f["height"]), reverse=True)
     return {
-        "id": info["id"],
+        "id": video_id,
         "title": info.get("title"),
-        "url": f"https://www.youtube.com/watch?v={info['id']}",
+        "url": f"https://www.youtube.com/watch?v={video_id}",
         "duration": info.get("duration"),
         "channel": info.get("channel") or info.get("uploader"),
         "channelUrl": info.get("channel_url") or info.get("uploader_url"),
@@ -613,6 +646,39 @@ def get_metadata(url: str) -> dict:
     }
 
 
+def get_metadata(url: str) -> dict:
+    stdout = _run(["--dump-single-json", "--flat-playlist", url], timeout=60)
+    assert stdout is not None
+    info = json.loads(stdout)
+
+    if "entries" in info:
+        entries = info.get("entries", [])
+        dur = sum(e.get("duration", 0) or 0 for e in entries)
+        thumb = info.get("thumbnail")
+        if not thumb:
+            thumbs = info.get("thumbnails") or []
+            if thumbs:
+                thumb = thumbs[-1]["url"]
+        if not thumb and entries:
+            thumb = entries[0].get("thumbnail")
+        return {
+            "id": info.get("id", ""),
+            "title": info.get("title") or (entries[0].get("title") if entries else None),
+            "url": url,
+            "duration": dur,
+            "channel": info.get("channel") or info.get("uploader") or (entries[0].get("channel") if entries else None),
+            "channelUrl": info.get("channel_url") or info.get("uploader_url"),
+            "thumbnail": thumb,
+            "description": info.get("description"),
+            "viewCount": info.get("view_count"),
+            "likeCount": info.get("like_count"),
+            "formats": [],
+            "bestHeight": None,
+        }
+
+    return _build_metadata(info["id"], info)
+
+
 def get_playlist_info(url: str) -> list[dict[str, Any]]:
     stdout = _run(["--flat-playlist", "--dump-json", url], timeout=120)
     assert stdout is not None
@@ -621,6 +687,8 @@ def get_playlist_info(url: str) -> list[dict[str, Any]]:
         if not line:
             continue
         e = json.loads(line)
+        thumbnails = e.get("thumbnails") or []
+        thumbnail_url = thumbnails[-1]["url"] if thumbnails else None
         entries.append(
             {
                 "id": e["id"],
@@ -628,6 +696,7 @@ def get_playlist_info(url: str) -> list[dict[str, Any]]:
                 "url": f"https://www.youtube.com/watch?v={e['id']}",
                 "duration": e.get("duration"),
                 "channel": e.get("channel") or e.get("uploader"),
+                "thumbnail_url": thumbnail_url,
             }
         )
     return entries

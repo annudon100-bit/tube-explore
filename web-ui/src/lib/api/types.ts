@@ -89,6 +89,7 @@ export interface FileProgress {
   channel?: string | null;
   duration?: number | null;
   formatInfo?: FormatInfo[] | null;
+  thumbnailUrl?: string | null;
 }
 export interface TaskResponse {
   id: string;

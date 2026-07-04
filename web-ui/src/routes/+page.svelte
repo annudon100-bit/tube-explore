@@ -10,10 +10,10 @@
   import SearchResults from '$lib/components/search/SearchResults.svelte';
   import MetadataResult from '$lib/components/search/MetadataResult.svelte';
   import PlaylistResult from '$lib/components/search/PlaylistResult.svelte';
-  import LiveVideoProgress from '$lib/components/downloads/live/LiveVideoProgress.svelte';
-  import LivePlaylistProgress from '$lib/components/downloads/live/LivePlaylistProgress.svelte';
   import TasksDialog from '$lib/components/tasks/TasksDialog.svelte';
-  import TaskDetailDialog from '$lib/components/tasks/TaskDetailDialog.svelte';
+  import DownloadTaskDetailDialog from '$lib/components/downloads/live/DownloadTaskDetailDialog.svelte';
+  import VideoDownloadDialog from '$lib/components/downloads/VideoDownloadDialog.svelte';
+  import PlaylistDownloadDialog from '$lib/components/downloads/PlaylistDownloadDialog.svelte';
   import FilesDialog from '$lib/components/files/FilesDialog.svelte';
   import ProfilesDialog from '$lib/components/profiles/ProfilesDialog.svelte';
   import SettingsDialog from '$lib/components/settings/SettingsDialog.svelte';
@@ -23,6 +23,7 @@
   import { getPlaylist } from '$lib/api/playlist';
   import { getHealth } from '$lib/api/health';
   import { listProfiles } from '$lib/api/profiles';
+  import { getTask } from '$lib/api/tasks';
   import type { HealthResponse, MetadataResponse, PlaylistResponse, ProfileResponse, SearchResponse, TaskResponse } from '$lib/api/types';
   import { connectEventStream, disconnectEventStream } from '$lib/state/event-stream';
 
@@ -36,6 +37,7 @@
   let searchResult: SearchResponse | null = null;
   let metadata: MetadataResponse | null = null;
   let playlist: PlaylistResponse | null = null;
+  let transitioning = false;
 
   async function refreshChrome() {
     try {
@@ -53,11 +55,24 @@
     try { onDone(await fn()); } catch (e) { error = e instanceof Error ? e.message : 'Request failed'; } finally { busy = false; }
   }
 
-  function openDownloadVideo(url = '') { downloadUrl = url; dialog = 'videoDownload'; }
-  function openDownloadPlaylist(url = '') { downloadUrl = url; dialog = 'playlistDownload'; }
+  function openDownloadVideo(url = '') { downloadUrl = url; dialog = 'videoDownload'; selectedTask = null; }
+  function openDownloadPlaylist(url = '') { downloadUrl = url; dialog = 'playlistDownload'; selectedTask = null; }
   function openDialog(key: string) { dialog = key; }
   function handleTask(task: TaskResponse) { selectedTask = task; dialog = 'taskDetail'; }
   function handleViewAll() { dialog = 'tasks'; }
+
+  async function handleCreatedTask(taskId: string) {
+    transitioning = true;
+    refreshChrome();
+    try {
+      const task = await getTask(taskId);
+      selectedTask = task;
+      dialog = 'taskDetail';
+    } catch {
+      dialog = null;
+    }
+    transitioning = false;
+  }
 
   onMount(() => {
     refreshChrome();
@@ -114,15 +129,15 @@
 {/if}
 
 {#if dialog === 'videoDownload'}
-  <LiveVideoProgress url={downloadUrl} {profiles} onClose={() => dialog = null} onCreated={refreshChrome} />
+  <VideoDownloadDialog url={downloadUrl} {profiles} onClose={() => { if (!transitioning) dialog = null; }} onCreated={handleCreatedTask} />
 {/if}
 
 {#if dialog === 'playlistDownload'}
-  <LivePlaylistProgress url={downloadUrl} {profiles} onClose={() => dialog = null} onCreated={refreshChrome} />
+  <PlaylistDownloadDialog url={downloadUrl} {profiles} onClose={() => { if (!transitioning) dialog = null; }} onCreated={handleCreatedTask} />
 {/if}
 
 {#if dialog === 'tasks'}<TasksDialog onClose={() => { dialog = null; refreshChrome(); }} />{/if}
-{#if dialog === 'taskDetail' && selectedTask}<TaskDetailDialog task={selectedTask} onClose={() => { dialog = null; selectedTask = null; }} onChanged={refreshChrome} />{/if}
+{#if dialog === 'taskDetail' && selectedTask}<DownloadTaskDetailDialog task={selectedTask} onClose={() => { dialog = null; selectedTask = null; }} onChanged={refreshChrome} />{/if}
 {#if dialog === 'files'}<FilesDialog onClose={() => dialog = null} />{/if}
 {#if dialog === 'profiles'}<ProfilesDialog onClose={() => { dialog = null; refreshChrome(); }} />{/if}
 {#if dialog === 'settings'}<SettingsDialog onClose={() => { dialog = null; refreshChrome(); }} />{/if}

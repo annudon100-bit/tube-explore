@@ -193,6 +193,7 @@ class FileProgress(BaseModel):
     channel: str | None = None
     duration: int | None = None
     format_info: list[FormatInfo] | None = Field(None, validation_alias="formatInfo")
+    thumbnail_url: str | None = Field(None, validation_alias="thumbnailUrl")
 
 
 # ── Task ──────────────────────────────────────────────────────

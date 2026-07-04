@@ -5,6 +5,7 @@
   import { dateTime } from '$lib/utils/format';
   import type { TaskResponse } from '$lib/api/types';
   import { tasks } from '$lib/state/event-stream';
+  import { API_BASE_URL } from '$lib/config/env';
 
   export let onTask: (task: TaskResponse) => void = () => {};
   export let onViewAll: () => void = () => {};
@@ -54,7 +55,13 @@
         <div class="dropdown-list">
           {#each recent as task}
             <button class="row clickable" type="button" on:click={() => { open = false; onTask(task); }}>
-              <div class="avatar">{task.type === 'playlist' ? '♫' : '▶'}</div>
+              <div class="avatar">
+                {#if task.thumbnailPath}
+                  <img src={`${API_BASE_URL}${task.thumbnailPath}`} alt="" class="avatar-img" />
+                {:else}
+                  {task.type === 'playlist' ? '♫' : '▶'}
+                {/if}
+              </div>
               <div>
                 <div class="row-title">{task.type === 'playlist' ? 'Playlist' : 'Video'}</div>
                 <div class="row-sub">{task.url}</div>

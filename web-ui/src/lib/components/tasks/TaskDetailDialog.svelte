@@ -9,7 +9,8 @@
   import { fileDownloadUrl } from '$lib/api/files';
   import { tasks } from '$lib/state/event-stream';
   import { showToast } from '$lib/state/toast-state';
-  import { bytes, dateTime } from '$lib/utils/format';
+  import { bytes, dateTime, duration } from '$lib/utils/format';
+  import { API_BASE_URL } from '$lib/config/env';
   import type { TaskResponse, TaskResultResponse } from '$lib/api/types';
 
   export let task: TaskResponse;
@@ -23,6 +24,7 @@
     const updated = $tasks.find(t => t.id === current.id);
     if (updated) current = updated;
   }
+  $: thumbnailUrl = current.thumbnailPath ? `${API_BASE_URL}${current.thumbnailPath}` : null;
   $: isPartiallyFailed = current.status === 'completed' && !!current.error;
   $: fileList = current.fileProgress ?? [];
   $: activeIdx = fileList.findIndex(f => f.status === 'downloading');
@@ -47,6 +49,16 @@
 <ModalFrame title="Task details" onClose={onClose}>
   <ErrorMessage message={error} />
   <div class="grid" style="gap:16px">
+    {#if thumbnailUrl}
+      <div class="thumb-row">
+        <img class="thumb" src={thumbnailUrl} alt="" />
+        <div class="thumb-meta">
+          <h3>{current.title || (current.type === 'playlist' ? 'Playlist' : 'Video')}</h3>
+          {#if current.channel}<span class="row-sub">{current.channel}</span>{/if}
+          {#if current.duration}<span class="row-sub">{duration(current.duration)}</span>{/if}
+        </div>
+      </div>
+    {/if}
     <div class="panel card" style="box-shadow:none">
       <div class="card-header">
         <div>
@@ -122,5 +134,32 @@
     display: grid;
     gap: 4px;
     margin-top: 6px;
+  }
+  .thumb-row {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+  }
+  .thumb {
+    width: 160px;
+    height: 90px;
+    border-radius: 12px;
+    object-fit: cover;
+    flex-shrink: 0;
+    background: rgba(255,255,255,0.06);
+  }
+  .thumb-meta {
+    min-width: 0;
+    overflow: hidden;
+  }
+  .thumb-meta h3 {
+    margin: 0 0 6px;
+    font-size: 18px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .thumb-meta .row-sub {
+    margin-top: 0;
   }
 </style>

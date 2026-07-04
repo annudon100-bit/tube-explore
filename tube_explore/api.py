@@ -234,6 +234,25 @@ def _run_in_background(tid: str, fn, *args, url: str | None = None, metadata_fet
             except Exception as e:
                 logger.warning("Metadata pre-fetch failed for task %s: %s", tid, e)
 
+        # ── Pre-fetch playlist video titles and thumbnails ────
+        _playlist_titles: dict[int, str] = {}
+        _playlist_thumbnails: dict[int, str] = {}
+        if url and ("playlist" in url or "list=" in url):
+            try:
+                entries = ytdlp.get_playlist_info(url)
+                for i, e in enumerate(entries):
+                    _playlist_titles[i] = e.get("title") or f"Video {i+1}"
+                    thumb = e.get("thumbnail_url")
+                    if thumb:
+                        _playlist_thumbnails[i] = thumb
+                fp = [
+                    {"index": i, "title": _playlist_titles[i], "thumbnailUrl": _playlist_thumbnails.get(i)}
+                    for i in range(len(entries))
+                ]
+                _update_task(tid, file_progress=fp, total_items=len(fp))
+            except Exception as e:
+                logger.warning("Failed to pre-fetch playlist entries for task %s: %s", tid, e)
+
         # ── Progress callback ────────────────────────────────
         _start_time = datetime.now(UTC)
 
@@ -242,6 +261,14 @@ def _run_in_background(tid: str, fn, *args, url: str | None = None, metadata_fet
             elapsed = int((datetime.now(UTC) - _start_time).total_seconds())
             update: dict[str, object] = {"progress_percent": percent, "elapsed": elapsed}
             if file_progress_list is not None:
+                if _playlist_titles:
+                    for fp in file_progress_list:
+                        idx = fp.get("index")
+                        if idx is not None:
+                            if not fp.get("title") and idx in _playlist_titles:
+                                fp["title"] = _playlist_titles[idx]
+                            if not fp.get("thumbnailUrl") and idx in _playlist_thumbnails:
+                                fp["thumbnailUrl"] = _playlist_thumbnails[idx]
                 update["file_progress"] = file_progress_list
             if extra:
                 step = extra.get("step")
@@ -259,6 +286,12 @@ def _run_in_background(tid: str, fn, *args, url: str | None = None, metadata_fet
                 eta_val = extra.get("eta")
                 if eta_val:
                     update["eta"] = eta_val
+                ci = extra.get("current_index")
+                if ci is not None:
+                    update["current_index"] = ci
+                ti = extra.get("total_items")
+                if ti is not None:
+                    update["total_items"] = ti
             logger.info("_progress: extra=%s update=%s", extra, update)
             _update_task(tid, **update)
 

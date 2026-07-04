@@ -120,8 +120,12 @@
         <div class="items-header">Videos</div>
         {#each fileList as file, i}
           <div class="playlist-item" class:active={i === currentIndex} class:done={file.status === 'completed'} class:pending={file.status === 'pending'}>
-            <span class="item-index">{i + 1}</span>
-            <span class="item-title">{file.title || `Video ${i + 1}`}</span>
+            {#if file.thumbnailUrl}
+              <img src={file.thumbnailUrl} alt="" class="item-thumb" />
+            {:else}
+              <span class="item-index">{i + 1}</span>
+            {/if}
+            <span class="item-title" title={file.title || ''}>{file.title || `Video ${i + 1}`}</span>
             <div class="item-meta">
               {#if file.status === 'downloading'}
                 <span class="item-pct">{file.percent}%</span>
@@ -231,6 +235,9 @@
     background: rgba(255, 255, 255, 0.02);
     transition: background 0.2s;
   }
+  .playlist-item:has(.item-thumb) {
+    grid-template-columns: 60px 1fr auto;
+  }
   .playlist-item.active {
     background: rgba(124, 60, 255, 0.15);
   }
@@ -245,6 +252,12 @@
     font-weight: 700;
     color: var(--muted);
     text-align: center;
+  }
+  .item-thumb {
+    width: 60px;
+    height: 34px;
+    border-radius: 6px;
+    object-fit: cover;
   }
   .item-title {
     font-size: 13px;
