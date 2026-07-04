@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { cancelTask, retryTask } from '$lib/api/tasks';
+  import { cancelTask, retryTask, pauseTask, resumeTask } from '$lib/api/tasks';
   import { tasks } from '$lib/state/event-stream';
   import { showToast } from '$lib/state/toast-state';
   import { bytes, duration as fmtDuration, clampPercent } from '$lib/utils/format';
@@ -11,7 +11,6 @@
   export let onChanged: () => void = () => {};
 
   let current = task;
-  let paused = false;
 
   $: {
     const updated = $tasks.find(t => t.id === current.id);
@@ -26,11 +25,12 @@
   $: activeIdx = fileList.findIndex(f => f.status === 'downloading');
   $: totalItems = current.totalItems ?? 0;
   $: currentIndex = current.currentIndex ?? 0;
+  $: isPaused = current.status === 'paused';
 
   $: statusLabel = (() => {
     if (current.status === 'cancelled') return 'Cancelled';
     if (current.status === 'completed') return 'Completed';
-    if (paused) return 'Paused';
+    if (current.status === 'paused') return 'Paused';
     if (current.status === 'pending') return 'Starting';
     if (current.status === 'failed') return 'Failed';
     if (step === 'fetching_metadata') return 'Fetching metadata';
@@ -45,7 +45,7 @@
   $: activityText = (() => {
     if (current.status === 'cancelled') return 'Task cancelled';
     if (current.status === 'completed') return 'Download complete';
-    if (paused) return `Paused — ${stepLabel}`;
+    if (current.status === 'paused') return `Paused — ${stepLabel}`;
     if (step === 'fetching_metadata') return 'Fetching metadata…';
     if (step === 'preparing') return 'Preparing download…';
     if (step === 'downloading') return 'Downloading parts…';
@@ -61,6 +61,7 @@
   $: progressLabel = (() => {
     if (current.status === 'cancelled') return 'Stopped before completion';
     if (current.status === 'completed') return 'File is ready';
+    if (current.status === 'paused') return 'Download paused — parts preserved';
     if (step === 'fetching_metadata') return 'Reading title, duration, thumbnail, and streams';
     if (step === 'preparing') return 'Selecting streams and creating download parts';
     if (step === 'downloading') return 'Downloading video and audio in parts';
@@ -74,6 +75,7 @@
   $: partsDone = fileList.filter(f => f.status === 'completed').length;
   $: partsText = (() => {
     if (current.status === 'completed') return 'All parts downloaded';
+    if (current.status === 'paused') return 'Download paused — partial parts kept';
     if (step === 'downloading') return 'Downloading parts';
     if (stepIndexBefore('downloading')) return 'Parts will appear when download starts';
     return 'Download parts complete';
@@ -101,7 +103,7 @@
   $: partsBarSegments = Array.from({ length: partsCount }, (_, i) => {
     if (current.status === 'completed') return 100;
     if (i < partsDone) return 100;
-    if (i === partsDone && step === 'downloading') {
+    if (i === partsDone && (step === 'downloading' || current.status === 'paused')) {
       return clampPercent(((pct - 14) / (72 - 14)) * 100);
     }
     return 0;
@@ -121,27 +123,30 @@
   }
 
   $: isComplete = current.status === 'completed';
-  $: isCancelled = current.status === 'cancelled' || current.status === 'failed';
+  $: isFailed = current.status === 'failed';
+  $: isCancelled = current.status === 'cancelled';
+  $: isTerminal = isComplete || isCancelled || isFailed;
 
   $: hintText = (() => {
-    if (isCancelled) return 'This task was cancelled.';
+    if (isCancelled) return 'This task was cancelled. Partial files have been removed.';
+    if (isFailed) return 'This task failed. You can retry to resume from where it left off.';
     if (isComplete) return 'Download complete. The file is ready.';
-    if (paused) return 'Download is paused.';
+    if (isPaused) return 'Download is paused. Resume to continue or cancel to discard.';
     return 'You can close this dialog. The task will continue in the background.';
   })();
 
   $: pauseBtnText = (() => {
     if (isComplete) return 'Open file';
-    if (isCancelled) return 'Retry';
-    if (paused) return 'Resume';
+    if (isFailed) return 'Retry';
+    if (isCancelled) return 'Restart';
+    if (isPaused) return 'Resume';
     return 'Pause';
   })();
 
   async function doCancel() {
     try {
       await cancelTask(current.id);
-      showToast('Task cancelled');
-      current = { ...current, status: 'cancelled' };
+      showToast('Task cancelled — partial files removed');
       onChanged();
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Unable to cancel');
@@ -159,16 +164,32 @@
     }
   }
 
-  function doPause() {
+  async function doPauseResume() {
     if (isComplete) {
       showToast('Open file action would connect to the completed file.');
       return;
     }
-    if (isCancelled) {
+    if (isFailed || isCancelled) {
       doRetry();
       return;
     }
-    paused = !paused;
+    if (isPaused) {
+      try {
+        await resumeTask(current.id);
+        showToast('Download resumed');
+        onChanged();
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : 'Unable to resume');
+      }
+    } else {
+      try {
+        await pauseTask(current.id);
+        showToast('Download paused');
+        onChanged();
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : 'Unable to pause');
+      }
+    }
   }
 
   async function copyLink() {
@@ -195,7 +216,7 @@
 </script>
 
 <div class="modal-backdrop" role="presentation" on:click={onClose} on:keydown={(e) => e.key === 'Escape' && onClose()}>
-  <div class="modal-custom" class:cancelled={isCancelled} class:complete={isComplete} class:paused={paused} role="dialog" aria-modal="true" tabindex="0" on:click|stopPropagation>
+  <div class="modal-custom" class:terminal={isTerminal} class:complete={isComplete} class:paused={isPaused} class:failed={isFailed} class:cancelled={isCancelled} role="dialog" aria-modal="true" tabindex="0" on:click|stopPropagation>
   <header class="modal-header">
     <div class="title-wrap">
       <div class="title-icon" aria-hidden="true">
@@ -305,7 +326,7 @@
       </section>
 
       <section class="activity-card">
-          <div class="spinner" class:stopped={isComplete || isCancelled}></div>
+          <div class="spinner" class:stopped={isTerminal} class:pausedSpin={isPaused}></div>
         <div class="activity-info">
           <div class="activity-eyebrow">{isCancelled ? 'Task cancelled' : isComplete ? 'Finished' : progressStepLabel(step)}</div>
           <div class="activity-title">{activityText}</div>
@@ -376,8 +397,8 @@
     <div class="hint">{hintText}</div>
     <div class="actions">
       <button class="ghost-btn" type="button" on:click={copyLink}>Copy link</button>
-      <button class="danger-btn" type="button" disabled={isCancelled || isComplete} on:click={doCancel} style={isCancelled || isComplete ? 'display:none' : ''}>Cancel</button>
-      <button class="primary-btn" type="button" on:click={doPause}>{pauseBtnText}</button>
+      <button class="danger-btn" type="button" disabled={isTerminal} on:click={doCancel} style={isTerminal ? 'display:none' : ''}>Cancel</button>
+      <button class="primary-btn" type="button" on:click={doPauseResume}>{pauseBtnText}</button>
     </div>
   </footer>
 </div>
@@ -656,6 +677,39 @@
     color: var(--red, #ff4d7e);
   }
 
+  .failed .pulse {
+    background: var(--red, #ff4d7e);
+    box-shadow: 0 0 16px rgba(255, 77, 126, 0.75);
+  }
+
+  .failed .percent,
+  .failed .activity-text,
+  .failed .activity-title {
+    color: var(--red, #ff4d7e);
+  }
+
+  .paused .progress-fill {
+    background: linear-gradient(180deg, #ffc857, #ff9d2f);
+    box-shadow: 0 0 18px rgba(255, 200, 87, 0.55);
+  }
+
+  .paused .part-fill {
+    background: linear-gradient(180deg, #ffc857, #ff9d2f);
+  }
+
+  .paused .percent {
+    color: var(--orange, #ff9d2f);
+  }
+
+  .failed .progress-fill {
+    background: linear-gradient(180deg, #ff4d7e, #ef4444);
+    box-shadow: 0 0 18px rgba(255, 77, 126, 0.55);
+  }
+
+  .failed .part-fill {
+    background: linear-gradient(180deg, #ff4d7e, #ef4444);
+  }
+
   .parts-line {
     margin-top: 12px;
     color: var(--muted, #a9afd0);
@@ -855,6 +909,11 @@
 
   .spinner.stopped {
     animation: none;
+  }
+
+  .spinner.pausedSpin {
+    border-top-color: var(--orange, #ff9d2f);
+    animation-duration: 2.5s;
   }
 
   @keyframes spin {

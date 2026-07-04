@@ -5,7 +5,7 @@
   import FileProgressRow from '$lib/components/shared/FileProgressRow.svelte';
   import ErrorMessage from '$lib/components/shared/ErrorMessage.svelte';
   import StatsGrid from '$lib/components/downloads/live/StatsGrid.svelte';
-  import { cancelTask, deleteTask, getTask, getTaskResult, retryTask } from '$lib/api/tasks';
+  import { cancelTask, deleteTask, getTask, getTaskResult, retryTask, pauseTask, resumeTask } from '$lib/api/tasks';
   import { fileDownloadUrl } from '$lib/api/files';
   import { tasks } from '$lib/state/event-stream';
   import { showToast } from '$lib/state/toast-state';
@@ -28,6 +28,13 @@
   $: isPartiallyFailed = current.status === 'completed' && !!current.error;
   $: fileList = current.fileProgress ?? [];
   $: activeIdx = fileList.findIndex(f => f.status === 'downloading');
+  $: isPaused = current.status === 'paused';
+  $: isRunning = current.status === 'running';
+  $: isActive = current.status === 'running' || current.status === 'paused';
+  $: isCancelled = current.status === 'cancelled';
+  $: canCancel = current.status === 'pending' || current.status === 'running' || current.status === 'paused' || isCancelled;
+  $: canDelete = current.status !== 'pending' && current.status !== 'running' && current.status !== 'paused';
+  $: canRetry = current.status === 'failed' || (current.status === 'completed' && !!current.error);
 
   async function refresh() {
     try { current = await getTask(current.id); } catch (e) { error = e instanceof Error ? e.message : 'Unable to refresh task'; }
@@ -36,7 +43,13 @@
     try { result = await getTaskResult(current.id); } catch (e) { error = e instanceof Error ? e.message : 'Unable to load result'; }
   }
   async function doCancel() {
-    try { await cancelTask(current.id); showToast('Task cancelled'); await refresh(); onChanged(); } catch (e) { error = e instanceof Error ? e.message : 'Unable to cancel'; }
+    try { await cancelTask(current.id); showToast('Task cancelled — partial files removed'); await refresh(); onChanged(); } catch (e) { error = e instanceof Error ? e.message : 'Unable to cancel'; }
+  }
+  async function doPause() {
+    try { await pauseTask(current.id); showToast('Task paused'); await refresh(); onChanged(); } catch (e) { error = e instanceof Error ? e.message : 'Unable to pause'; }
+  }
+  async function doResume() {
+    try { await resumeTask(current.id); showToast('Task resumed'); await refresh(); onChanged(); } catch (e) { error = e instanceof Error ? e.message : 'Unable to resume'; }
   }
   async function doRetry() {
     try { const next = await retryTask(current.id); showToast(`Retry queued: ${next.taskId}`); onChanged(); onClose(); } catch (e) { error = e instanceof Error ? e.message : 'Unable to retry'; }
@@ -70,7 +83,7 @@
       <ProgressBar value={current.progressPercent} />
     </div>
 
-    {#if current.status === 'running' || current.status === 'completed'}
+    {#if isActive || current.status === 'completed'}
       <div class="panel card" style="box-shadow:none">
         <StatsGrid
           speed={current.speed}
@@ -106,9 +119,14 @@
 
     <div class="action-row">
       <button class="btn" on:click={refresh}>Refresh</button>
-      <button class="btn orange" disabled={!['pending','running'].includes(current.status)} on:click={doCancel}>Cancel</button>
-      <button class="btn green" disabled={!(current.status === 'failed' || isPartiallyFailed)} on:click={doRetry}>Retry</button>
-      <button class="btn red" disabled={['pending','running'].includes(current.status)} on:click={doDelete}>Delete</button>
+      {#if isPaused}
+        <button class="btn green" on:click={doResume}>Resume</button>
+      {:else if isRunning}
+        <button class="btn orange" on:click={doPause}>Pause</button>
+      {/if}
+      <button class="btn orange" disabled={!canCancel} on:click={isCancelled ? doRetry : doCancel}>{isCancelled ? 'Restart' : 'Cancel'}</button>
+      <button class="btn green" disabled={!canRetry} on:click={doRetry}>Retry</button>
+      <button class="btn red" disabled={!canDelete} on:click={doDelete}>Delete</button>
       {#if current.status === 'completed'}
         <button class="btn" on:click={loadResult}>View result</button>
       {/if}

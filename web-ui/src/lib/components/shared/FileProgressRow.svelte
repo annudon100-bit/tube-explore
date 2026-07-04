@@ -7,7 +7,7 @@
 
   $: pct = clampPercent(file.percent);
   $: label = file.title || (file.status === 'pending' ? `Video ${file.index + 1}` : `Video ${file.index + 1}`);
-  $: statusIcon = file.status === 'downloading' ? '▸' : file.status === 'completed' ? '✓' : file.status === 'failed' ? '✗' : '○';
+  $: statusIcon = file.status === 'downloading' ? '▸' : file.status === 'completed' ? '✓' : file.status === 'failed' ? '✗' : file.status === 'paused' ? '⏸' : '○';
 </script>
 
 <div class="file-row" class:active={isActive}>
@@ -30,7 +30,7 @@
     {/if}
   </div>
   <div class="progress-mini-track">
-    <div class="progress-mini-bar" style={`width: ${pct}%`} class:completed={file.status === 'completed'} class:failed={file.status === 'failed'}></div>
+    <div class="progress-mini-bar" style={`width: ${pct}%`} class:completed={file.status === 'completed'} class:failed={file.status === 'failed'} class:paused={file.status === 'paused'}></div>
   </div>
 </div>
 
@@ -112,5 +112,8 @@
   }
   .progress-mini-bar.failed {
     background: var(--red, #ef4444);
+  }
+  .progress-mini-bar.paused {
+    background: var(--orange, #ff9d2f);
   }
 </style>

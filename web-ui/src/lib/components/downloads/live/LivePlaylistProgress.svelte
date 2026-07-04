@@ -6,6 +6,7 @@
   import StatsGrid from './StatsGrid.svelte';
   import ProgressBar from '$lib/components/shared/ProgressBar.svelte';
   import { startPlaylistDownload } from '$lib/api/downloads';
+  import { cancelTask, pauseTask, resumeTask } from '$lib/api/tasks';
   import { showToast } from '$lib/state/toast-state';
   import { tasks } from '$lib/state/event-stream';
   import { duration, clampPercent } from '$lib/utils/format';
@@ -56,13 +57,22 @@
   $: fileList = currentTask?.fileProgress ?? [];
   $: totalItems = currentTask?.totalItems ?? 0;
   $: currentIndex = currentTask?.currentIndex ?? 0;
+  $: isPaused = currentTask?.status === 'paused';
 
   function cancel() {
     if (taskId) {
-      import('$lib/api/tasks').then(({ cancelTask }) => {
-        cancelTask(taskId!).catch(() => {});
-      });
+      cancelTask(taskId!).catch(() => {});
     }
+  }
+
+  async function doPause() {
+    if (!taskId) return;
+    try { await pauseTask(taskId); showToast('Download paused'); } catch (e) { showToast(e instanceof Error ? e.message : 'Unable to pause'); }
+  }
+
+  async function doResume() {
+    if (!taskId) return;
+    try { await resumeTask(taskId); showToast('Download resumed'); } catch (e) { showToast(e instanceof Error ? e.message : 'Unable to resume'); }
   }
 
   function closeAndCleanup() {
@@ -142,8 +152,12 @@
     {/if}
 
     <div class="action-row live-actions">
-      <button class="btn orange" disabled>Pause (coming soon)</button>
-      <button class="btn red" on:click={cancel} disabled={currentTask?.status !== 'running'}>
+      {#if isPaused}
+        <button class="btn green" on:click={doResume}>Resume</button>
+      {:else}
+        <button class="btn orange" on:click={doPause} disabled={currentTask?.status !== 'running'}>Pause</button>
+      {/if}
+      <button class="btn red" on:click={cancel} disabled={currentTask?.status !== 'running' && !isPaused}>
         Cancel
       </button>
     </div>

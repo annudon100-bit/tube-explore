@@ -16,10 +16,41 @@ from tube_explore.models import AudioFormat, CodecPreference, FormatType, Profil
 
 logger = logging.getLogger(__name__)
 
+# Track output file paths per task so cancel can clean up precisely
+_task_output_files: dict[str, list[str]] = {}
+_task_output_files_lock = threading.Lock()
+
+
+def _track_output_file(task_id: str, filepath: str) -> None:
+    with _task_output_files_lock:
+        if task_id not in _task_output_files:
+            _task_output_files[task_id] = []
+        _task_output_files[task_id].append(filepath)
+
+
+def _get_task_output_files(task_id: str) -> list[str]:
+    with _task_output_files_lock:
+        return list(_task_output_files.get(task_id, []))
+
+
+def _clear_task_output_files(task_id: str) -> None:
+    with _task_output_files_lock:
+        _task_output_files.pop(task_id, None)
+
+
+def _try_remove(path: str) -> None:
+    try:
+        if os.path.isfile(path):
+            os.remove(path)
+            logger.debug("Removed file: %s", path)
+    except OSError as e:
+        logger.warning("Failed to remove %s: %s", path, e)
+
+
 # yt-dlp stderr progress regexes
 _PLAYLIST_PAT = re.compile(r"\[download\] Downloading (?:video|item) (\d+) of (\d+)")
 _PROGRESS_PAT = re.compile(r"\[download\]\s+([\d.]+)%")
-_DEST_PAT = re.compile(r"\[download\] (?:Destination:\s+)?(/.+)")
+_DEST_PAT = re.compile(r"\[download\] (?:Destination:\s+)?(?:temp=|home=)?(/.+)")
 _COMPLETE_PAT = re.compile(r"\[download\]\s+100%")
 _INFO_PAT = re.compile(r"\[info\] .+ Downloading \d+ format\(s\)")
 _MERGER_PAT = re.compile(r"\[Merger\] Merging formats into")
@@ -30,6 +61,7 @@ _PLAYLIST_DL_PAT = re.compile(r"\[download\] Downloading playlist:")
 _PLAYLIST_ITEMS_PAT = re.compile(r"Downloading (\d+) items")
 _ALREADY_DL_PAT = re.compile(r"\[download\] (.+?) has already been downloaded")
 _TOTAL_BYTES_PAT = re.compile(r"of\s+([\d.]+)\s*([KMG]iB)")
+_THUMBNAIL_PAT = re.compile(r"\[info\] Writing video thumbnail \d+ to: (?:temp=|home=)?(.+)")
 
 def _extract_title_from_path(filepath: str) -> str:
     """Extract a clean video title from a yt-dlp output path.
@@ -70,6 +102,15 @@ THUMBNAIL_DIR = os.path.join(config.get_metadata_dir(), "thumbnails")
 # Track running download processes for cancellation
 _running_procs: dict[str, subprocess.Popen] = {}
 _proc_lock = threading.Lock()
+
+# Track paused tasks so _run knows to suppress RuntimeError on SIGTERM exit
+_paused_tasks: set[str] = set()
+_paused_lock = threading.Lock()
+
+
+class PauseError(Exception):
+    """Raised inside _run when the process was intentionally paused."""
+    pass
 
 
 def get_ffmpeg_version() -> str | None:
@@ -262,6 +303,7 @@ def _run(
             current_total_bytes = total_bytes
             current_downloaded_bytes = downloaded
 
+    _was_paused = False
     try:
         assert proc.stdout is not None
         for raw_line in proc.stdout:
@@ -279,6 +321,13 @@ def _run(
             if _PLAYLIST_DL_PAT.search(line) or _PLAYLIST_ITEMS_PAT.search(line):
                 _set_phase("preparing")
                 _fire()
+                continue
+
+            # ── Thumbnail download (--embed-thumbnail) ────────
+            m = _THUMBNAIL_PAT.search(line)
+            if m:
+                if task_id:
+                    _track_output_file(task_id, m.group(1))
                 continue
 
             # ── Playlist item index ──────────────────────────
@@ -301,6 +350,8 @@ def _run(
                 fp_list[current_index]["title"] = _extract_title_from_path(m.group(1))
                 fp_list[current_index]["percent"] = 100.0
                 fp_list[current_index]["status"] = "completed"
+                if task_id:
+                    _track_output_file(task_id, m.group(1))
                 _fire()
                 continue
 
@@ -309,6 +360,8 @@ def _run(
             if m:
                 _ensure(current_index)
                 fp_list[current_index]["title"] = _extract_title_from_path(m.group(1))
+                if task_id:
+                    _track_output_file(task_id, m.group(1))
                 current_downloaded_bytes = 0
                 current_total_bytes = None
                 _set_phase("downloading")
@@ -353,26 +406,79 @@ def _run(
                 _fire()
 
         proc.wait()
+        if task_id and _pop_paused(task_id):
+            _was_paused = True
+            raise PauseError(f"Task {task_id} was paused")
         if proc.returncode == 0:
             _set_phase("finalizing")
             _fire()
-        elif proc.returncode not in (0, -9):
+        elif proc.returncode == -9:
+            pass
+        else:
             logger.warning("yt-dlp exited with code %d during download", proc.returncode)
+            raise RuntimeError(f"yt-dlp exited with code {proc.returncode}")
     finally:
         if task_id:
             with _proc_lock:
                 _running_procs.pop(task_id, None)
+            if not _was_paused:
+                _clear_task_output_files(task_id)
 
     return None
 
 
-def cancel_download(task_id: str) -> None:
-    """Terminate the running yt-dlp process for the given task."""
+def _pop_paused(task_id: str) -> bool:
+    """Check if task_id is in the paused set and remove it. Thread-safe."""
+    with _paused_lock:
+        if task_id in _paused_tasks:
+            _paused_tasks.remove(task_id)
+            return True
+        return False
+
+
+def cancel_download(task_id: str, cleanup_dirs: list[str] | None = None) -> None:
+    """Terminate the running yt-dlp process and remove only this task's output files."""
+    tracked = _get_task_output_files(task_id)
+    _clear_task_output_files(task_id)
+
     with _proc_lock:
         proc = _running_procs.get(task_id)
     if proc:
         logger.info("Cancelling download task %s (pid %d)", task_id, proc.pid)
         proc.terminate()
+
+    for filepath in tracked:
+        base = filepath[:-5] if filepath.lower().endswith(".part") else filepath
+        _try_remove(filepath)
+        _try_remove(base)
+        _try_remove(base + ".part")
+        _try_remove(base + ".ytdl")
+        _try_remove(base + ".temp")
+        dirpath = os.path.dirname(base)
+        basename = os.path.basename(base)
+        if os.path.isdir(dirpath):
+            for fname in os.listdir(dirpath):
+                if fname.startswith(basename) and (
+                    fname.lower().endswith((".frag", ".part", ".ytdl", ".temp"))
+                    or ".frag" in fname.lower()
+                ):
+                    _try_remove(os.path.join(dirpath, fname))
+
+
+def pause_download(task_id: str) -> bool:
+    """Pause a running download by terminating the process. Partial files are preserved for resume."""
+    with _proc_lock:
+        proc = _running_procs.get(task_id)
+    if proc and proc.poll() is None:
+        logger.info("Pausing download task %s (pid %d)", task_id, proc.pid)
+        with _paused_lock:
+            _paused_tasks.add(task_id)
+        proc.terminate()
+        return True
+    return False
+
+
+
 
 
 # ── Format-string helpers ─────────────────────────────────────
@@ -433,6 +539,7 @@ def _build_args(
     remux_to: str | None = None,
     download_base: str | None = None,
     temp_dir: str | None = None,
+    continue_download: bool = False,
 ) -> list[str]:
     # Resolve effective values: request override > profile > built-in default
     eff_audio_only = audio_only or profile.format_type == FormatType.audio_only
@@ -448,6 +555,8 @@ def _build_args(
         )
 
     args = ["--no-overwrites", "--newline"]
+    if continue_download:
+        args.append("--continue")
     if is_playlist:
         args.append("--yes-playlist")
 
@@ -531,6 +640,7 @@ def _download_with_profile(
     include_playlist_dir: bool | None = None,
     download_base: str | None = None,
     temp_dir: str | None = None,
+    continue_download: bool = False,
 ) -> dict[str, Any]:
     os.makedirs(output_dir, exist_ok=True)
 
@@ -556,6 +666,7 @@ def _download_with_profile(
         remux_to=remux_to,
         download_base=effective_base,
         temp_dir=temp_dir,
+        continue_download=continue_download,
     )
 
     if video_range:
@@ -715,6 +826,7 @@ def download_video(
     progress_callback: Any | None = None,
     download_base: str | None = None,
     temp_dir: str | None = None,
+    continue_download: bool = False,
 ) -> dict[str, Any]:
     if profile is None:
         profile = Profile(id=0, name="_adhoc", created_at=datetime.now(), updated_at=datetime.now())
@@ -733,6 +845,7 @@ def download_video(
         progress_callback=progress_callback,
         download_base=download_base,
         temp_dir=temp_dir,
+        continue_download=continue_download,
     )
 
 
@@ -751,6 +864,7 @@ def download_playlist(
     include_playlist_dir: bool | None = None,
     download_base: str | None = None,
     temp_dir: str | None = None,
+    continue_download: bool = False,
 ) -> dict[str, Any]:
     if profile is None:
         profile = Profile(id=0, name="_adhoc", created_at=datetime.now(), updated_at=datetime.now())
@@ -771,4 +885,5 @@ def download_playlist(
         include_playlist_dir=include_playlist_dir,
         download_base=download_base,
         temp_dir=temp_dir,
+        continue_download=continue_download,
     )

@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from tube_explore import config, db, ytdlp
+from tube_explore.ytdlp import PauseError
 from tube_explore.models import Profile, ProfileCreate, ProfileUpdate, TaskInfo
 from tube_explore.schemas import (
     DownloadedFile,
@@ -197,7 +198,8 @@ def _update_task(tid: str, **kwargs):
         if task is None:
             return
         extra: dict[str, object] = {"updated_at": datetime.now(UTC)}
-        if kwargs.get("status") in ("completed", "failed"):
+        terminal_states = ("completed", "failed", "cancelled")
+        if kwargs.get("status") in terminal_states:
             extra["completed_at"] = datetime.now(UTC)
         new_kwargs = kwargs | extra
         task = task.model_copy(update=new_kwargs)
@@ -298,6 +300,10 @@ def _run_in_background(tid: str, fn, *args, url: str | None = None, metadata_fet
         kwargs["progress_callback"] = _progress
         try:
             result = fn(*args, **kwargs)
+            with _lock:
+                task = _tasks.get(tid)
+                if task and task.status == "cancelled":
+                    return
             if not result:
                 _update_task(tid, status="completed", progress_percent=100)
                 return
@@ -306,7 +312,13 @@ def _run_in_background(tid: str, fn, *args, url: str | None = None, metadata_fet
                 _update_task(tid, status="completed", result=files, progress_percent=100)
             else:
                 _update_task(tid, status="completed", progress_percent=100)
+        except PauseError:
+            return
         except Exception as e:
+            with _lock:
+                task = _tasks.get(tid)
+                if task and task.status == "cancelled":
+                    return
             _update_task(tid, status="failed", error=str(e), progress_percent=100)
 
     t = threading.Thread(target=wrapper, daemon=True, name="download-worker")
@@ -512,20 +524,100 @@ def get_task_result(task_id: str):
     if not task:
         raise HTTPException(404, "Task not found")
     files = [DownloadedFile(**f) for f in (task.result or [])]
-    return TaskResultResponse(task_id=task.id, status=cast("Literal['pending', 'running', 'completed', 'failed', 'cancelled']", task.status), files=files)
+    return TaskResultResponse(task_id=task.id, status=cast("Literal['pending', 'running', 'completed', 'failed', 'cancelled', 'paused']", task.status), files=files)
 
 
-@app.post("/api/tasks/{task_id}/cancel", responses=_404_409, summary="Cancel task", description="Cancel a pending or running task. Terminates the yt-dlp process and sets status to `cancelled`.", tags=["Tasks"])
+@app.post("/api/tasks/{task_id}/cancel", responses=_404_409, summary="Cancel task", description="Cancel a pending, running, or paused task. Terminates the yt-dlp process, removes partial download files, and sets status to `cancelled`.", tags=["Tasks"])
 def cancel_task(task_id: str):
     with _lock:
         task = _tasks.get(task_id)
         if not task:
             raise HTTPException(404, "Task not found")
-        if task.status not in ("pending", "running"):
-            raise HTTPException(409, f"Cannot cancel task in status '{task.status}'")
-        _update_task(task_id, status="cancelled")
+        if task.status not in ("pending", "running", "paused"):
+            raise HTTPException(409, f"Cancel task in status '{task.status}'")
+    # Lock released before _update_task (which acquires _lock internally)
+    _update_task(task_id, status="cancelled")
     ytdlp.cancel_download(task_id)
     return OkResponse(ok=True)
+
+
+@app.post("/api/tasks/{task_id}/pause", responses=_404_409, summary="Pause task", description="Pause a running download task. The yt-dlp process is terminated but partial files are preserved for resume.", tags=["Tasks"])
+def pause_task(task_id: str):
+    with _lock:
+        task = _tasks.get(task_id)
+        if not task:
+            raise HTTPException(404, "Task not found")
+        if task.status != "running":
+            raise HTTPException(409, f"Cannot pause task in status '{task.status}'")
+    # Lock released before _update_task (which acquires _lock internally)
+    paused = ytdlp.pause_download(task_id)
+    if paused:
+        _update_task(task_id, status="paused")
+    else:
+        raise HTTPException(409, "Process not found or already completed")
+    return OkResponse(ok=True)
+
+
+@app.post("/api/tasks/{task_id}/resume", responses=_404_409, summary="Resume task", description="Resume a paused download task. Restarts yt-dlp with --continue to pick up partial files.", tags=["Tasks"])
+def resume_task(task_id: str):
+    with _lock:
+        task = _tasks.get(task_id)
+        if not task:
+            raise HTTPException(404, "Task not found")
+        if task.status != "paused":
+            raise HTTPException(409, f"Cannot resume task in status '{task.status}'")
+    try:
+        _resume_task_download(task)
+    except Exception as e:
+        with _lock:
+            _update_task(task_id, status="failed", error=f"Resume failed: {e}")
+        raise HTTPException(500, f"Resume failed: {e}") from e
+    return OkResponse(ok=True)
+
+
+def _resume_task_download(task: TaskInfo) -> None:
+    """Re-spawn a download with the same task_id (for resume). Uses --continue."""
+    ytdlp.cancel_download(task.id, cleanup_dirs=None)
+    settings = db.get_all_settings()
+    download_base = config.get_download_dir()
+    temp_dir = settings.get("temp_directory", "").strip() or "/temp"
+    params = task.params
+    if task.type == "video":
+        body = DownloadVideoRequest.model_validate(params)
+        profile = _resolve_profile(body.profile_id, body)
+        out = _resolve_output_path(body, profile)
+        _run_in_background(
+            task.id, ytdlp.download_video, body.url,
+            url=body.url,
+            output_dir=out, profile=profile, settings=settings,
+            audio_only=body.audio_only,
+            audio_format=body.audio_format.value if body.audio_format else None,
+            audio_quality=body.audio_quality,
+            remux_to=body.remux_to,
+            task_id=task.id,
+            download_base=download_base,
+            temp_dir=temp_dir,
+            continue_download=True,
+        )
+    else:
+        pl_body = DownloadPlaylistRequest.model_validate(params)
+        profile = _resolve_profile(pl_body.profile_id, pl_body)
+        out = _resolve_output_path(pl_body, profile)
+        _run_in_background(
+            task.id, ytdlp.download_playlist, pl_body.url,
+            url=pl_body.url,
+            output_dir=out, profile=profile, settings=settings,
+            video_range=pl_body.range,
+            audio_only=pl_body.audio_only,
+            audio_format=pl_body.audio_format.value if pl_body.audio_format else None,
+            audio_quality=pl_body.audio_quality,
+            remux_to=pl_body.remux_to,
+            task_id=task.id,
+            include_playlist_dir=pl_body.include_playlist_dir,
+            download_base=download_base,
+            temp_dir=temp_dir,
+            continue_download=True,
+        )
 
 
 def _re_run_task(task: TaskInfo) -> str:
@@ -549,6 +641,7 @@ def _re_run_task(task: TaskInfo) -> str:
             task_id=tid,
             download_base=download_base,
             temp_dir=temp_dir,
+            continue_download=True,
         )
         return tid
     pl_body = DownloadPlaylistRequest.model_validate(params)
@@ -568,20 +661,26 @@ def _re_run_task(task: TaskInfo) -> str:
         include_playlist_dir=pl_body.include_playlist_dir,
         download_base=download_base,
         temp_dir=temp_dir,
+        continue_download=True,
     )
     return tid
 
 
-@app.post("/api/tasks/{task_id}/retry", response_model=DownloadTaskCreatedResponse, responses=_404_409, summary="Retry task", description="Retry a failed or partially-failed download task. Creates a new task with the same parameters and returns the new task ID and status URLs.", tags=["Tasks"])
+@app.post("/api/tasks/{task_id}/retry", response_model=DownloadTaskCreatedResponse, responses=_404_409, summary="Retry task", description="Retry a failed, paused, or partially-failed download task. Resumes a paused task or creates a new task with the same parameters for failed tasks. Returns the task ID and status URL.", tags=["Tasks"])
 def retry_task(task_id: str):
     with _lock:
         task = _tasks.get(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
-    if task.status not in ("failed", "completed"):
+    if task.status not in ("failed", "paused", "cancelled", "completed"):
         raise HTTPException(409, f"Cannot retry task in status '{task.status}'")
     if task.status == "completed" and not task.error:
         raise HTTPException(409, "Task completed successfully with no errors; nothing to retry")
+
+    if task.status == "paused":
+        _resume_task_download(task)
+        return DownloadTaskCreatedResponse(task_id=task_id, status="pending", status_url=f"/api/tasks/{task_id}")
+
     tid = _re_run_task(task)
     return DownloadTaskCreatedResponse(task_id=tid, status="pending", status_url=f"/api/tasks/{tid}")
 
@@ -592,7 +691,7 @@ def delete_task(task_id: str):
         task = _tasks.get(task_id)
         if not task:
             raise HTTPException(404, "Task not found")
-        if task.status in ("pending", "running"):
+        if task.status in ("pending", "running", "paused"):
             raise HTTPException(409, f"Cannot delete task in status '{task.status}'")
         del _tasks[task_id]
     _broadcast("task_deleted", {"id": task_id})

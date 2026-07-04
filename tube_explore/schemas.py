@@ -226,7 +226,7 @@ class TaskResponse(BaseModel):
     type: Literal["video", "playlist"]
     url: str
     params: dict[str, object] = {}
-    status: Literal["pending", "running", "completed", "failed", "cancelled"] = "pending"
+    status: Literal["pending", "running", "completed", "failed", "cancelled", "paused"] = "pending"
     progress_percent: int = Field(0, validation_alias="progressPercent")
     progress_step: ProgressStep | None = Field(None, validation_alias="progressStep")
     file_progress: list[FileProgress] | None = Field(None, validation_alias="fileProgress")
@@ -254,7 +254,7 @@ class TaskResultResponse(BaseModel):
     model_config = _CAMEL_CONFIG
 
     task_id: str = Field(..., description="Task ID")
-    status: Literal["pending", "running", "completed", "failed", "cancelled"] = Field(..., description="Task status")
+    status: Literal["pending", "running", "completed", "failed", "cancelled", "paused"] = Field(..., description="Task status")
     files: list[DownloadedFile] = Field(default_factory=list, description="List of downloaded files")
 
 

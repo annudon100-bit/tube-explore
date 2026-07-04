@@ -1,5 +1,5 @@
 export type QualityMode = 'best' | 'least' | 'at_most' | 'at_least';
-export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
 export type TaskType = 'video' | 'playlist';
 export type AudioFormat = 'best' | 'aac' | 'alac' | 'flac' | 'm4a' | 'mp3' | 'opus' | 'vorbis' | 'wav';
 export type FormatType = 'video+audio' | 'video-only' | 'audio-only';

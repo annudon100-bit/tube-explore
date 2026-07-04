@@ -14,7 +14,7 @@
   let container: HTMLDivElement;
 
   $: recent = $tasks.slice(0, 5);
-  $: activeCount = recent.filter(t => ['pending', 'running', 'failed'].includes(t.status)).length;
+  $: activeCount = recent.filter(t => ['pending', 'running', 'failed', 'paused'].includes(t.status)).length;
 
   function toggle() {
     open = !open;

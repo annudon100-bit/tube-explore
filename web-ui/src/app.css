@@ -648,6 +648,7 @@ svg { display: block; }
 .status.running { background: rgba(124, 60, 255, 0.2); color: var(--purple-light); }
 .status.completed { background: rgba(21, 211, 139, 0.15); color: var(--green); }
 .status.failed { background: rgba(245, 76, 122, 0.15); color: var(--red); }
+.status.paused { background: rgba(255, 157, 47, 0.15); color: var(--orange); }
 .status.cancelled { background: rgba(255, 255, 255, 0.06); color: var(--muted); }
 .status.processing { background: rgba(255, 157, 47, 0.15); color: var(--orange); }
 
