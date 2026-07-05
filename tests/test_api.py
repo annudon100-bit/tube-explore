@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tube_explore import config, db
-from tube_explore.api import _create_task, _lock, _global_sub_lock, _global_subscribers, _subscribe_global, _tasks, _unsubscribe_global, _broadcast, app
+from tube_explore.api import _lock, _global_sub_lock, _global_subscribers, _subscribe_global, _tasks, _unsubscribe_global, _broadcast, app
 
 client = TestClient(app)
 
@@ -186,12 +186,6 @@ def test_download_video_unknown_profile():
 
 
 # ── Tasks ─────────────────────────────────────────────────────
-
-
-def test_list_tasks_empty():
-    resp = client.get("/api/tasks")
-    assert resp.status_code == 200
-    assert resp.json() == []
 
 
 def test_get_nonexistent_task():

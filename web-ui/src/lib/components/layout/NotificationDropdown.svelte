@@ -8,7 +8,6 @@
   import { API_BASE_URL } from '$lib/config/env';
 
   export let onTask: (task: TaskResponse) => void = () => {};
-  export let onViewAll: () => void = () => {};
 
   let open = false;
   let container: HTMLDivElement;
@@ -47,7 +46,6 @@
     <div class="dropdown-panel">
       <div class="dropdown-header">
         <strong>Recent Activity</strong>
-        <button class="link-btn" type="button" on:click={() => { open = false; onViewAll(); }}>View all</button>
       </div>
       {#if recent.length === 0}
         <div class="empty">No tasks yet.</div>

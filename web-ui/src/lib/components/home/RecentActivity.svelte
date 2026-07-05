@@ -7,13 +7,11 @@
 
   export let tasks: TaskResponse[] = [];
   export let onTask: (task: TaskResponse) => void = () => {};
-  export let onViewAll: () => void = () => {};
 </script>
 
 <section class="panel card">
   <div class="card-header">
     <h2>Recent Activity</h2>
-    <button class="link-btn" type="button" on:click={onViewAll}>View all</button>
   </div>
   {#if tasks.length === 0}
     <div class="empty">No tasks yet. Start a download to see activity.</div>

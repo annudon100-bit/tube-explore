@@ -436,6 +436,15 @@ def _pop_paused(task_id: str) -> bool:
         return False
 
 
+def kill_process(task_id: str) -> None:
+    """Terminate a running yt-dlp process for task_id without removing partial files."""
+    with _proc_lock:
+        proc = _running_procs.get(task_id)
+    if proc:
+        logger.info("Killing process for task %s (pid %d)", task_id, proc.pid)
+        proc.terminate()
+
+
 def cancel_download(task_id: str, cleanup_dirs: list[str] | None = None) -> None:
     """Terminate the running yt-dlp process and remove only this task's output files."""
     tracked = _get_task_output_files(task_id)

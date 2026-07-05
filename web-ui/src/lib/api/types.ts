@@ -118,8 +118,6 @@ export interface TaskResponse {
   error?: string | null;
   result?: DownloadedFile[] | null;
 }
-export interface TaskResultResponse { taskId: string; status: TaskStatus; files: DownloadedFile[]; }
-
 export interface FileInfo { id?: string; name: string; size: number; path: string; taskId: string; sourceUrl?: string | null; createdAt: string; }
 
 export interface ProfileBase {

@@ -250,14 +250,6 @@ class TaskResponse(BaseModel):
     total_items: int | None = Field(None, validation_alias="totalItems")
 
 
-class TaskResultResponse(BaseModel):
-    model_config = _CAMEL_CONFIG
-
-    task_id: str = Field(..., description="Task ID")
-    status: Literal["pending", "running", "completed", "failed", "cancelled", "paused"] = Field(..., description="Task status")
-    files: list[DownloadedFile] = Field(default_factory=list, description="List of downloaded files")
-
-
 # ── Profile ───────────────────────────────────────────────────
 
 

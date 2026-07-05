@@ -10,10 +10,10 @@
   import SearchResults from '$lib/components/search/SearchResults.svelte';
   import MetadataResult from '$lib/components/search/MetadataResult.svelte';
   import PlaylistResult from '$lib/components/search/PlaylistResult.svelte';
-  import TasksDialog from '$lib/components/tasks/TasksDialog.svelte';
   import DownloadTaskDetailDialog from '$lib/components/downloads/live/DownloadTaskDetailDialog.svelte';
   import VideoDownloadDialog from '$lib/components/downloads/VideoDownloadDialog.svelte';
   import PlaylistDownloadDialog from '$lib/components/downloads/PlaylistDownloadDialog.svelte';
+  import DownloadsPage from '$lib/components/downloads/DownloadsPage.svelte';
   import FilesDialog from '$lib/components/files/FilesDialog.svelte';
   import ProfilesDialog from '$lib/components/profiles/ProfilesDialog.svelte';
   import SettingsDialog from '$lib/components/settings/SettingsDialog.svelte';
@@ -27,6 +27,7 @@
   import type { HealthResponse, MetadataResponse, PlaylistResponse, ProfileResponse, SearchResponse, TaskResponse } from '$lib/api/types';
   import { connectEventStream, disconnectEventStream } from '$lib/state/event-stream';
 
+  let currentPage: 'home' | 'downloads' = 'home';
   let health: HealthResponse | null = null;
   let profiles: ProfileResponse[] = [];
   let busy = false;
@@ -38,6 +39,12 @@
   let metadata: MetadataResponse | null = null;
   let playlist: PlaylistResponse | null = null;
   let transitioning = false;
+
+  function navigate(page: string) {
+    if (page === 'home' || page === 'downloads') {
+      currentPage = page;
+    }
+  }
 
   async function refreshChrome() {
     try {
@@ -59,8 +66,6 @@
   function openDownloadPlaylist(url = '') { downloadUrl = url; dialog = 'playlistDownload'; selectedTask = null; }
   function openDialog(key: string) { dialog = key; }
   function handleTask(task: TaskResponse) { selectedTask = task; dialog = 'taskDetail'; }
-  function handleViewAll() { dialog = 'tasks'; }
-
   async function handleCreatedTask(taskId: string) {
     transitioning = true;
     refreshChrome();
@@ -84,28 +89,32 @@
 
 <Icons />
 
-<AppShell {health} onOpen={openDialog} onTask={handleTask} onViewAll={handleViewAll}>
-  <section class="hero">
-    <div class="logo-lockup">
-      <svg class="logo-mark" viewBox="0 0 120 120" aria-hidden="true">
-        <use href="#logo-symbol"></use>
-      </svg>
-      <h1 class="wordmark">Tube <span>Explore</span></h1>
-    </div>
+<AppShell {health} onOpen={openDialog} onTask={handleTask} activePage={currentPage} {navigate}>
+  {#if currentPage === 'home'}
+    <section class="hero">
+      <div class="logo-lockup">
+        <svg class="logo-mark" viewBox="0 0 120 120" aria-hidden="true">
+          <use href="#logo-symbol"></use>
+        </svg>
+        <h1 class="wordmark">Tube <span>Explore</span></h1>
+      </div>
 
-    <HeroActionPanel
-      {busy}
-      onSearch={(q, limit) => run(() => searchMedia(q, limit), (data) => { searchResult = data; dialog = 'searchResults'; })}
-      onInspectMetadata={(url) => run(() => getMetadata(url), (data) => { metadata = data; dialog = 'metadata'; })}
-      onInspectPlaylist={(url) => run(() => getPlaylist(url), (data) => { playlist = data; dialog = 'playlist'; })}
-      onDownloadVideo={openDownloadVideo}
-      onDownloadPlaylist={openDownloadPlaylist}
-    />
+      <HeroActionPanel
+        {busy}
+        onSearch={(q, limit) => run(() => searchMedia(q, limit), (data) => { searchResult = data; dialog = 'searchResults'; })}
+        onInspectMetadata={(url) => run(() => getMetadata(url), (data) => { metadata = data; dialog = 'metadata'; })}
+        onInspectPlaylist={(url) => run(() => getPlaylist(url), (data) => { playlist = data; dialog = 'playlist'; })}
+        onDownloadVideo={openDownloadVideo}
+        onDownloadPlaylist={openDownloadPlaylist}
+      />
 
-    <ErrorMessage message={error} />
+      <ErrorMessage message={error} />
 
-    <QuickManageCards onOpen={openDialog} />
-  </section>
+      <QuickManageCards onOpen={openDialog} />
+    </section>
+  {:else if currentPage === 'downloads'}
+    <DownloadsPage onOpen={openDialog} onTask={handleTask} />
+  {/if}
 </AppShell>
 
 <ToastHost />
@@ -136,7 +145,6 @@
   <PlaylistDownloadDialog url={downloadUrl} {profiles} onClose={() => { if (!transitioning) dialog = null; }} onCreated={handleCreatedTask} />
 {/if}
 
-{#if dialog === 'tasks'}<TasksDialog onClose={() => { dialog = null; refreshChrome(); }} />{/if}
 {#if dialog === 'taskDetail' && selectedTask}<DownloadTaskDetailDialog task={selectedTask} onClose={() => { dialog = null; selectedTask = null; }} onChanged={refreshChrome} />{/if}
 {#if dialog === 'files'}<FilesDialog onClose={() => dialog = null} />{/if}
 {#if dialog === 'profiles'}<ProfilesDialog onClose={() => { dialog = null; refreshChrome(); }} />{/if}

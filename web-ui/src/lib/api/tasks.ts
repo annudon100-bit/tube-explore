@@ -1,16 +1,8 @@
-import { apiRequest, qs } from './client';
-import type { DownloadTaskCreatedResponse, OkResponse, PageArgs, TaskResponse, TaskResultResponse } from './types';
-
-export function listTasks(args: PageArgs = {}) {
-  return apiRequest<TaskResponse[]>(`/api/tasks${qs({ limit: args.limit ?? 50, offset: args.offset ?? 0 })}`);
-}
+import { apiRequest } from './client';
+import type { DownloadTaskCreatedResponse, TaskResponse } from './types';
 
 export function getTask(taskId: string) {
   return apiRequest<TaskResponse>(`/api/tasks/${encodeURIComponent(taskId)}`);
-}
-
-export function getTaskResult(taskId: string) {
-  return apiRequest<TaskResultResponse>(`/api/tasks/${encodeURIComponent(taskId)}/result`);
 }
 
 export function cancelTask(taskId: string) {
@@ -27,9 +19,5 @@ export function resumeTask(taskId: string) {
 
 export function retryTask(taskId: string) {
   return apiRequest<DownloadTaskCreatedResponse>(`/api/tasks/${encodeURIComponent(taskId)}/retry`, { method: 'POST' });
-}
-
-export function deleteTask(taskId: string) {
-  return apiRequest<OkResponse>(`/api/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
 }
 

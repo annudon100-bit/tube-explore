@@ -6,7 +6,8 @@
   export let health: HealthResponse | null = null;
   export let onOpen: (key: string) => void = () => {};
   export let onTask: (task: TaskResponse) => void = () => {};
-  export let onViewAll: () => void = () => {};
+  export let activePage = 'home';
+  export let navigate: (page: string) => void = () => {};
 
   let collapsed = true;
 
@@ -14,9 +15,9 @@
 </script>
 
 <div class="app-shell" class:sidebar-open={!collapsed}>
-  <Sidebar {onOpen} {collapsed} onToggle={toggleSidebar} />
+  <Sidebar {onOpen} {collapsed} onToggle={toggleSidebar} {activePage} {navigate} />
   <main class="main">
-    <TopBar {health} {onTask} {onViewAll} onHealth={() => onOpen('health')} />
+    <TopBar {health} {onTask} onHealth={() => onOpen('health')} />
     <slot />
   </main>
 </div>

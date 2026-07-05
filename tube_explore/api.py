@@ -9,7 +9,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 logging.basicConfig(level=logging.INFO, force=True)
 logger = logging.getLogger(__name__)
@@ -44,7 +44,6 @@ from tube_explore.schemas import (
     SettingsResponse,
     SettingsUpdateRequest,
     TaskResponse,
-    TaskResultResponse,
 )
 
 _404: dict[int | str, dict[str, Any]] = {404: {"model": ErrorResponse, "description": "Resource not found"}}
@@ -488,14 +487,7 @@ def get_task(task_id: str):
     return task
 
 
-@app.get("/api/tasks", response_model=list[TaskResponse], summary="List tasks", description="List all background download tasks. Sorted by creation time (newest first). Includes status, type, URL, and error info for each task.", tags=["Tasks"])
-def list_tasks(limit: int = Query(50, ge=1, le=200, description="Maximum number of results"), offset: int = Query(0, ge=0, description="Number of results to skip")):
-    with _lock:
-        items = list(_tasks.values())
-    return items[offset:][:limit]
-
-
-@app.get("/api/events", summary="Global event stream", description="Persistent SSE connection that streams all task lifecycle events: snapshot, task_created, task_updated, task_deleted. Sends keepalive every 30s.", tags=["Tasks"])
+@app.get("/api/events", summary="Global event stream", description="Persistent SSE connection that streams all task lifecycle events: snapshot, task_created, task_updated. Sends keepalive every 30s.", tags=["Tasks"])
 async def event_stream():
     q = _subscribe_global()
 
@@ -515,16 +507,6 @@ async def event_stream():
             _unsubscribe_global(q)
 
     return StreamingResponse(event_gen(), media_type="text/event-stream")
-
-
-@app.get("/api/tasks/{task_id}/result", response_model=TaskResultResponse, responses=_404, summary="Get task result", description="Retrieve the files produced by a completed download task. Returns file names, sizes, and absolute paths.", tags=["Tasks"])
-def get_task_result(task_id: str):
-    with _lock:
-        task = _tasks.get(task_id)
-    if not task:
-        raise HTTPException(404, "Task not found")
-    files = [DownloadedFile(**f) for f in (task.result or [])]
-    return TaskResultResponse(task_id=task.id, status=cast("Literal['pending', 'running', 'completed', 'failed', 'cancelled', 'paused']", task.status), files=files)
 
 
 @app.post("/api/tasks/{task_id}/cancel", responses=_404_409, summary="Cancel task", description="Cancel a pending, running, or paused task. Terminates the yt-dlp process, removes partial download files, and sets status to `cancelled`.", tags=["Tasks"])
@@ -577,7 +559,6 @@ def resume_task(task_id: str):
 
 def _resume_task_download(task: TaskInfo) -> None:
     """Re-spawn a download with the same task_id (for resume). Uses --continue."""
-    ytdlp.cancel_download(task.id, cleanup_dirs=None)
     settings = db.get_all_settings()
     download_base = config.get_download_dir()
     temp_dir = settings.get("temp_directory", "").strip() or "/temp"
@@ -683,19 +664,6 @@ def retry_task(task_id: str):
 
     tid = _re_run_task(task)
     return DownloadTaskCreatedResponse(task_id=tid, status="pending", status_url=f"/api/tasks/{tid}")
-
-
-@app.delete("/api/tasks/{task_id}", response_model=OkResponse, responses=_404_409, summary="Delete task", description="Remove a completed, failed, or cancelled task from memory.", tags=["Tasks"])
-def delete_task(task_id: str):
-    with _lock:
-        task = _tasks.get(task_id)
-        if not task:
-            raise HTTPException(404, "Task not found")
-        if task.status in ("pending", "running", "paused"):
-            raise HTTPException(409, f"Cannot delete task in status '{task.status}'")
-        del _tasks[task_id]
-    _broadcast("task_deleted", {"id": task_id})
-    return OkResponse(ok=True)
 
 
 # ── Profiles ─────────────────────────────────────────────────
