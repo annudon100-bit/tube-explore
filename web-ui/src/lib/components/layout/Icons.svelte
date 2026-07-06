@@ -85,5 +85,53 @@
     <symbol id="i-list" viewBox="0 0 24 24">
       <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
     </symbol>
+
+    <symbol id="i-grid" viewBox="0 0 24 24">
+      <path d="M4 4h7v7H4Zm9 0h7v7h-7ZM4 13h7v7H4Zm9 0h7v7h-7Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+    </symbol>
+
+    <symbol id="i-refresh" viewBox="0 0 24 24">
+      <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+
+    <symbol id="i-filter" viewBox="0 0 24 24">
+      <path d="M4 5h16l-6 7v5l-4 2v-7Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+    </symbol>
+
+    <symbol id="i-sort" viewBox="0 0 24 24">
+      <path d="M7 4v16m0 0-3-3m3 3 3-3M17 20V4m0 0-3 3m3-3 3 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+
+    <symbol id="i-play" viewBox="0 0 24 24">
+      <path d="M8 5v14l11-7Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+    </symbol>
+
+    <symbol id="i-pause" viewBox="0 0 24 24">
+      <path d="M8 5v14M16 5v14" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/>
+    </symbol>
+
+    <symbol id="i-music" viewBox="0 0 24 24">
+      <path d="M9 18a3 3 0 1 1-2-2.83V5l11-2v12a3 3 0 1 1-2-2.83V7L9 8Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+    </symbol>
+
+    <symbol id="i-video" viewBox="0 0 24 24">
+      <path d="M4 6h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4Zm14 4 4-2v8l-4-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+    </symbol>
+
+    <symbol id="i-chart" viewBox="0 0 24 24">
+      <path d="M21 12a9 9 0 1 1-9-9v9Zm0 0a9 9 0 0 0-9-9" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+    </symbol>
+
+    <symbol id="i-more" viewBox="0 0 24 24">
+      <path d="M12 5.5h.01M12 12h.01M12 18.5h.01" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/>
+    </symbol>
+
+    <symbol id="i-plus" viewBox="0 0 24 24">
+      <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </symbol>
+
+    <symbol id="i-check" viewBox="0 0 24 24">
+      <path d="m5 13 4 4L19 7" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
   </defs>
 </svg>

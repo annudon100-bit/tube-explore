@@ -1,3 +1,4 @@
+import os
 import uuid
 from datetime import datetime
 from typing import Any, Literal, Self
@@ -176,6 +177,47 @@ class DownloadTaskCreatedResponse(BaseModel):
     status_url: str = Field(..., description="URL to poll task status")
 
 
+# ── File type classification ────────────────────────────────────
+
+_FILE_EXT_TYPE_MAP: dict[str, str] = {
+    ".mp4": "video", ".webm": "video", ".mkv": "video",
+    ".avi": "video", ".mov": "video", ".flv": "video", ".m4v": "video",
+    ".mp3": "audio", ".m4a": "audio", ".aac": "audio",
+    ".flac": "audio", ".opus": "audio", ".wav": "audio", ".ogg": "audio",
+    ".wma": "audio",
+    ".jpg": "image", ".jpeg": "image", ".png": "image",
+    ".gif": "image", ".webp": "image", ".bmp": "image", ".svg": "image",
+}
+
+_FILE_DETAIL_MAP: dict[str, str] = {
+    ".mp4": "Video", ".webm": "Video", ".mkv": "Video",
+    ".avi": "Video", ".mov": "Video", ".flv": "Video", ".m4v": "Video",
+    ".mp3": "Audio", ".m4a": "Audio", ".aac": "Audio",
+    ".flac": "Audio", ".opus": "Audio", ".wav": "Audio", ".ogg": "Audio",
+    ".wma": "Audio",
+    ".jpg": "Image", ".jpeg": "Image", ".png": "Image",
+    ".gif": "Image", ".webp": "Image", ".bmp": "Image", ".svg": "Image",
+}
+
+
+def classify_file_extension(filepath: str) -> str:
+    _, ext = os.path.splitext(filepath)
+    return ext.lower() if ext else ""
+
+
+def classify_file_type(filepath: str) -> str:
+    return _FILE_EXT_TYPE_MAP.get(classify_file_extension(filepath), "other")
+
+
+def classify_file_format(filepath: str) -> str:
+    ext = classify_file_extension(filepath)
+    return ext.lstrip(".").upper() if ext else ""
+
+
+def classify_file_detail(filepath: str) -> str:
+    return _FILE_DETAIL_MAP.get(classify_file_extension(filepath), "File")
+
+
 # ── File Progress ──────────────────────────────────────────────
 
 
@@ -203,9 +245,13 @@ class DownloadedFile(BaseModel):
     model_config = _CAMEL_CONFIG
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Unique file identifier")
-    name: str = Field(..., description="File name")
+    name: str = Field(..., description="File name (relative path from output directory)")
     size: int = Field(..., description="File size in bytes")
     path: str = Field(..., description="Absolute path to the file on disk")
+    file_type: str = Field("other", description="File category: video, audio, playlist, image, or other")
+    format: str = Field("", description="File format extension (e.g. MP4, MP3)")
+    detail: str = Field("File", description="Human-readable detail (e.g. 1080p, Audio)")
+    file_extension: str = Field("", description="File extension with dot (e.g. .mp4)")
 
 
 class FileInfo(DownloadedFile):
@@ -214,6 +260,31 @@ class FileInfo(DownloadedFile):
     task_id: str = Field(..., description="ID of the download task that produced this file")
     source_url: str | None = Field(None, description="Source media URL", json_schema_extra=_URL_FORMAT)
     created_at: datetime = Field(..., description="When the file was downloaded")
+    thumbnail_url: str | None = Field(None, description="URL to the file's thumbnail image")
+
+
+class FilesListResponse(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    items: list[FileInfo] = Field(..., description="Paginated list of files")
+    total: int = Field(..., description="Total number of matching files (across all pages)")
+
+
+class FileCategory(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    type: str = Field(..., description="File type key (video, audio, playlist, image, other)")
+    label: str = Field(..., description="Human-readable category label")
+    size: int = Field(..., description="Total size of files in this category in bytes")
+    count: int = Field(..., description="Number of files in this category")
+
+
+class FileStatsResponse(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    total_used: int = Field(..., validation_alias="totalUsed", description="Total storage used in bytes")
+    total_capacity: int = Field(..., validation_alias="totalCapacity", description="Total storage capacity in bytes")
+    categories: list[FileCategory] = Field(..., description="Breakdown by file type category")
 
 
 ProgressStep = Literal["fetching_metadata", "preparing", "downloading", "merging", "converting", "finalizing"]

@@ -118,7 +118,23 @@ export interface TaskResponse {
   error?: string | null;
   result?: DownloadedFile[] | null;
 }
-export interface FileInfo { id?: string; name: string; size: number; path: string; taskId: string; sourceUrl?: string | null; createdAt: string; }
+export interface FileInfo {
+  id?: string;
+  name: string;
+  size: number;
+  path: string;
+  fileType: string;
+  format: string;
+  detail: string;
+  fileExtension: string;
+  taskId: string;
+  sourceUrl?: string | null;
+  createdAt: string;
+  thumbnailUrl?: string | null;
+}
+export interface FilesListResponse { items: FileInfo[]; total: number; }
+export interface FileCategory { type: string; label: string; size: number; count: number; }
+export interface FileStatsResponse { totalUsed: number; totalCapacity: number; categories: FileCategory[]; }
 
 export interface ProfileBase {
   name?: string | null;

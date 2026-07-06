@@ -199,12 +199,27 @@ def test_get_nonexistent_task():
 def test_list_files_empty():
     resp = client.get("/api/files")
     assert resp.status_code == 200
-    assert resp.json() == []
+    data = resp.json()
+    assert data["items"] == []
+    assert data["total"] == 0
 
 
 def test_download_nonexistent_file():
     resp = client.get("/api/files/nonexistent/download")
     assert resp.status_code == 404
+
+
+def test_file_stats_empty():
+    resp = client.get("/api/files/stats")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["totalUsed"] == 0
+    assert data["totalCapacity"] > 0
+    cats = {c["type"]: c for c in data["categories"]}
+    for t in ("video", "audio", "playlist", "image", "other"):
+        assert t in cats
+        assert cats[t]["count"] == 0
+        assert cats[t]["size"] == 0
 
 
 # ── SSE ────────────────────────────────────────────────────────

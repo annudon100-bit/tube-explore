@@ -30,7 +30,10 @@ from tube_explore.schemas import (
     DownloadTaskCreatedResponse,
     DownloadVideoRequest,
     ErrorResponse,
+    FileCategory,
     FileInfo,
+    FilesListResponse,
+    FileStatsResponse,
     HealthResponse,
     MetadataResponse,
     OkResponse,
@@ -44,6 +47,9 @@ from tube_explore.schemas import (
     SettingsResponse,
     SettingsUpdateRequest,
     TaskResponse,
+    classify_file_extension,
+    classify_file_format,
+    classify_file_type,
 )
 
 _404: dict[int | str, dict[str, Any]] = {404: {"model": ErrorResponse, "description": "Resource not found"}}
@@ -779,25 +785,59 @@ def ready():
 # ── Files ─────────────────────────────────────────────────────
 
 
-@app.get("/api/files", response_model=list[FileInfo], summary="List downloaded files", description="List all completed download files across all tasks. Returns metadata including source URL, task ID, and creation time.", tags=["Files"])
-def list_files(limit: int = Query(50, ge=1, le=200, description="Maximum number of results"), offset: int = Query(0, ge=0, description="Number of results to skip")):
+@app.get("/api/files", response_model=FilesListResponse, summary="List downloaded files", description="List all completed download files across all tasks. Supports search, type filter, and sorting. Returns paginated results with total count.", tags=["Files"])
+def list_files(
+    limit: int = Query(50, ge=1, le=200, description="Maximum number of results"),
+    offset: int = Query(0, ge=0, description="Number of results to skip"),
+    search: str | None = Query(None, description="Filter by name or path (case-insensitive)"),
+    file_type: str | None = Query(None, alias="fileType", description="Filter by file type (video, audio, playlist, image, other)"),
+    sort_by: str | None = Query(None, alias="sortBy", description="Sort field: name, size, created_at (default: newest first)"),
+    sort_order: str | None = Query("desc", alias="sortOrder", description="Sort direction: asc or desc"),
+):
     results: list[FileInfo] = []
     with _lock:
         tasks = list(_tasks.values())
     for task in tasks:
         if task.status not in ("completed",):
             continue
+        thumbnail_base = None
+        if task.thumbnail_path:
+            thumbnail_base = task.thumbnail_path
         for f in (task.result or []):
+            file_type_val = f.get("fileType") or classify_file_type(f.get("path", ""))
+            fmt = f.get("format") or classify_file_format(f.get("path", ""))
+            ext = f.get("fileExtension") or classify_file_extension(f.get("path", ""))
+            detail = f.get("detail") or fmt
             results.append(FileInfo(
                 id=f.get("id", str(uuid.uuid4())),
                 name=f["name"],
                 size=f["size"],
                 path=f["path"],
+                file_type=file_type_val,
+                format=fmt,
+                detail=detail,
+                file_extension=ext,
                 task_id=task.id,
                 source_url=task.url,
                 created_at=task.completed_at or task.created_at,
+                thumbnail_url=thumbnail_base,
             ))
-    return results[offset:][:limit]
+    # Apply search filter
+    if search:
+        term = search.lower()
+        results = [r for r in results if term in r.name.lower() or term in r.path.lower() or term in r.format.lower()]
+    # Apply type filter
+    if file_type:
+        results = [r for r in results if r.file_type == file_type]
+    # Apply sort
+    if sort_by == "name":
+        results.sort(key=lambda r: r.name.lower(), reverse=(sort_order == "desc"))
+    elif sort_by == "size":
+        results.sort(key=lambda r: r.size, reverse=(sort_order == "desc"))
+    else:
+        results.sort(key=lambda r: r.created_at, reverse=(sort_order == "desc"))
+    total = len(results)
+    return FilesListResponse(items=results[offset:][:limit], total=total)
 
 
 @app.get("/api/files/{file_id}/download", summary="Download a file", description="Download a completed file by its file ID. Returns the file as a binary stream.", tags=["Files"])
@@ -818,6 +858,43 @@ def download_file(file_id: str):
                     headers={"Content-Disposition": f'attachment; filename="{f["name"]}"'},
                 )
     raise HTTPException(404, "File not found")
+
+
+@app.get("/api/files/stats", response_model=FileStatsResponse, summary="File storage statistics", description="Returns aggregate storage statistics: total used, total capacity, and breakdown by file type category.", tags=["Files"])
+def file_stats():
+    total_used = 0
+    categories: dict[str, dict[str, int]] = {
+        "video": {"size": 0, "count": 0},
+        "audio": {"size": 0, "count": 0},
+        "playlist": {"size": 0, "count": 0},
+        "image": {"size": 0, "count": 0},
+        "other": {"size": 0, "count": 0},
+    }
+    category_labels = {
+        "video": "Videos", "audio": "Audio", "playlist": "Playlists",
+        "image": "Images", "other": "Others",
+    }
+    with _lock:
+        tasks = list(_tasks.values())
+    for task in tasks:
+        if task.status not in ("completed",):
+            continue
+        for f in (task.result or []):
+            size = f.get("size", 0)
+            total_used += size
+            ft = f.get("fileType") or classify_file_type(f.get("path", ""))
+            if ft not in categories:
+                ft = "other"
+            categories[ft]["size"] += size
+            categories[ft]["count"] += 1
+    return FileStatsResponse(
+        total_used=total_used,
+        total_capacity=274877906944,
+        categories=[
+            FileCategory(type=ft, label=category_labels.get(ft, ft.capitalize()), **stats)
+            for ft, stats in categories.items()
+        ],
+    )
 
 
 @app.exception_handler(RequestValidationError)

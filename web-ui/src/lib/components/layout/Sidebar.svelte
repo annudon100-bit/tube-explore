@@ -20,6 +20,8 @@
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } else if (key === 'downloads') {
       navigate('downloads');
+    } else if (key === 'files') {
+      navigate('files');
     } else {
       onOpen(key);
     }
@@ -36,7 +38,7 @@
 
   <nav class="nav" aria-label="Main navigation">
     {#each items as [key, icon, label]}
-      <button class="nav-item" class:active={key === 'downloads' ? activePage === 'downloads' : false}
+      <button class="nav-item" class:active={key === 'downloads' ? activePage === 'downloads' : key === 'files' ? activePage === 'files' : false}
         type="button"
         on:click={() => handleNav(key)}
         title={label}>

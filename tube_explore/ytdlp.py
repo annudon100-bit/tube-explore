@@ -13,6 +13,7 @@ from typing import Any
 
 from tube_explore import config, db
 from tube_explore.models import AudioFormat, CodecPreference, FormatType, Profile, QualityMode
+from tube_explore.schemas import classify_file_extension, classify_file_format, classify_file_type, classify_file_detail
 
 logger = logging.getLogger(__name__)
 
@@ -683,20 +684,39 @@ def _download_with_profile(
 
     _run(args, capture=False, progress_callback=progress_callback, task_id=task_id)
 
-    files = _collect_files(output_dir)
+    files = _collect_files(output_dir, is_playlist=is_playlist, audio_only=audio_only)
     return {"files": files}
 
 
-def _collect_files(directory: str) -> list[dict[str, Any]]:
+def _collect_files(directory: str, is_playlist: bool = False, audio_only: bool = False) -> list[dict[str, Any]]:
     files: list[dict[str, Any]] = []
     for dirpath, _dirnames, filenames in os.walk(directory):
         for fn in sorted(filenames):
             path = os.path.join(dirpath, fn)
+            ext = classify_file_extension(path)
+            file_type = classify_file_type(path)
+            fmt = classify_file_format(path)
+            detail = classify_file_detail(path)
+
+            # Override type for playlist tasks: group all files under
+            # a playlist category regardless of individual file extension.
+            if is_playlist and file_type in ("video", "audio"):
+                file_type = "playlist"
+                fmt = "Playlist"
+                detail = "Video"
+
+            if audio_only and file_type == "video":
+                file_type = "audio"
+
             files.append({
                 "id": str(uuid.uuid4()),
                 "name": os.path.relpath(path, directory),
                 "size": os.path.getsize(path),
                 "path": path,
+                "fileType": file_type,
+                "format": fmt,
+                "detail": detail,
+                "fileExtension": ext,
             })
     return files
 

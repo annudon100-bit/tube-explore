@@ -298,7 +298,7 @@
           <article class="download-row" data-id={item.id}>
             <div class="thumb" class:playlist={item.type === 'playlist'} style="background: {thumbColors[i % thumbColors.length]}">
               {#if item.type === 'playlist'}
-                <div class="thumb-main" style="background: {playlistCoverColors[0]}"></div>
+                <div class="thumb-main" style="background: {thumbUrl(item) ? `url(${thumbUrl(item)})` : playlistCoverColors[0]}; {thumbUrl(item) ? 'background-size: cover; background-position: center;' : ''}"></div>
                 <div class="thumb-stack">
                   {#each playlistCoverColors.slice(1) as color}
                     <div style="background: {color}"></div>
@@ -328,9 +328,9 @@
                     <span>{item.totalItems} videos</span>
                   {/if}
                   {#if item.status === 'running' || item.status === 'pending'}
-                    {#if item.currentIndex}
+                    {#if item.currentIndex !== null && item.currentIndex !== undefined}
                       <span>•</span>
-                      <span>Downloading {item.currentIndex} of {item.totalItems ?? '—'}</span>
+                      <span>Downloading {item.currentIndex + 1} of {item.totalItems ?? '—'}</span>
                     {/if}
                   {/if}
                 {:else}
@@ -432,7 +432,7 @@
             {@const sortedFiles = [...(item.fileProgress ?? [])].sort((a, b) => a.index - b.index)}
             {@const doneCount = sortedFiles.filter(f => f.status === 'completed').length}
             {@const total = item.totalItems ?? sortedFiles.length ?? 0}
-            {@const current = currentFile?.index ?? (item.status === 'completed' ? total + 1 : doneCount + 1)}
+            {@const current = currentFile ? currentFile.index + 1 : (item.status === 'completed' ? total + 1 : doneCount + 1)}
             {@const queuedCount = Math.max(0, total - current)}
             {@const failedCount = item.fileProgress?.filter(f => f.status === 'failed' || f.status === 'error').length ?? 0}
             {@const maxMini = Math.min(total, 11)}
@@ -866,6 +866,14 @@
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
+    min-width: 0;
+  }
+
+  .download-meta > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .tag {

@@ -14,7 +14,7 @@
   import VideoDownloadDialog from '$lib/components/downloads/VideoDownloadDialog.svelte';
   import PlaylistDownloadDialog from '$lib/components/downloads/PlaylistDownloadDialog.svelte';
   import DownloadsPage from '$lib/components/downloads/DownloadsPage.svelte';
-  import FilesDialog from '$lib/components/files/FilesDialog.svelte';
+  import FilesPage from '$lib/components/files/FilesPage.svelte';
   import ProfilesDialog from '$lib/components/profiles/ProfilesDialog.svelte';
   import SettingsDialog from '$lib/components/settings/SettingsDialog.svelte';
   import HealthDialog from '$lib/components/settings/HealthDialog.svelte';
@@ -27,7 +27,7 @@
   import type { HealthResponse, MetadataResponse, PlaylistResponse, ProfileResponse, SearchResponse, TaskResponse } from '$lib/api/types';
   import { connectEventStream, disconnectEventStream } from '$lib/state/event-stream';
 
-  let currentPage: 'home' | 'downloads' = 'home';
+  let currentPage: 'home' | 'downloads' | 'files' = 'home';
   let health: HealthResponse | null = null;
   let profiles: ProfileResponse[] = [];
   let busy = false;
@@ -41,7 +41,7 @@
   let transitioning = false;
 
   function navigate(page: string) {
-    if (page === 'home' || page === 'downloads') {
+    if (page === 'home' || page === 'downloads' || page === 'files') {
       currentPage = page;
     }
   }
@@ -114,6 +114,8 @@
     </section>
   {:else if currentPage === 'downloads'}
     <DownloadsPage onOpen={openDialog} onTask={handleTask} />
+  {:else if currentPage === 'files'}
+    <FilesPage />
   {/if}
 </AppShell>
 
@@ -146,7 +148,7 @@
 {/if}
 
 {#if dialog === 'taskDetail' && selectedTask}<DownloadTaskDetailDialog task={selectedTask} onClose={() => { dialog = null; selectedTask = null; }} onChanged={refreshChrome} />{/if}
-{#if dialog === 'files'}<FilesDialog onClose={() => dialog = null} />{/if}
+
 {#if dialog === 'profiles'}<ProfilesDialog onClose={() => { dialog = null; refreshChrome(); }} />{/if}
 {#if dialog === 'settings'}<SettingsDialog onClose={() => { dialog = null; refreshChrome(); }} />{/if}
 {#if dialog === 'health'}<HealthDialog {health} onClose={() => { dialog = null; refreshChrome(); }} />{/if}
