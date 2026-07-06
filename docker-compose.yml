@@ -10,7 +10,23 @@ services:
       - ./downloads:/app/downloads
       - ./config:/app/config
       - ../temp:/temp
+    networks:
+      - tube-net
 
-volumes:
-  downloads:
-  config:
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    ports:
+      - "7878:7878"
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Etc/UTC
+    volumes:
+      - /home/prakhar/projects/radarr-config:/config
+      - ./downloads/radarr:/not/regular/path
+    networks:
+      - tube-net
+
+networks:
+  tube-net:
+    driver: bridge

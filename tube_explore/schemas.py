@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import uuid
 from datetime import datetime
@@ -262,6 +264,19 @@ class FileInfo(DownloadedFile):
     created_at: datetime = Field(..., description="When the file was downloaded")
     thumbnail_url: str | None = Field(None, description="URL to the file's thumbnail image")
 
+    storage_state: str | None = Field(None, alias="storageState", description="local, external_imported, missing, importing, import_failed")
+    external_system: str | None = Field(None, alias="externalSystem")
+    external_instance_id: str | None = Field(None, alias="externalInstanceId")
+    external_instance_name: str | None = Field(None, alias="externalInstanceName")
+    external_movie_id: int | None = Field(None, alias="externalMovieId")
+    external_movie_title: str | None = Field(None, alias="externalMovieTitle")
+    external_path: str | None = Field(None, alias="externalPath")
+    local_path: str | None = Field(None, alias="localPath")
+    downloadable: bool = True
+    import_status: str | None = Field(None, alias="importStatus", description="none, waiting_for_import, importing, imported, failed")
+    import_mode: str | None = Field(None, alias="importMode")
+    imported_at: str | None = Field(None, alias="importedAt")
+
 
 class FilesListResponse(BaseModel):
     model_config = _CAMEL_CONFIG
@@ -319,6 +334,7 @@ class TaskResponse(BaseModel):
     format_info: list[FormatInfo] | None = Field(None, validation_alias="formatInfo")
     current_index: int | None = Field(None, validation_alias="currentIndex")
     total_items: int | None = Field(None, validation_alias="totalItems")
+    integration: TaskIntegration | None = None
 
 
 # ── Profile ───────────────────────────────────────────────────
@@ -443,6 +459,198 @@ class HealthResponse(BaseModel):
 
 
 # ── Generic ───────────────────────────────────────────────────
+
+
+# ── Radarr ────────────────────────────────────────────────────
+
+
+class RadarrInstanceResponse(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    id: str
+    name: str
+    base_url: str
+    api_key_preview: str = Field(..., description="First 8 chars of API key")
+    tube_write_path: str
+    radarr_import_path: str
+    host_path_hint: str | None = None
+    default_profile_id: str | None = None
+    default_quality_profile_id: int | None = None
+    default_root_folder_path: str | None = None
+    import_mode: str = "move"
+    enabled: bool = True
+    is_default: bool = False
+    status: str = "unknown"
+    health_message: str | None = None
+    radarr_version: str | None = None
+    last_sync_at: str | None = None
+    last_test_at: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class RadarrInstanceUpsertRequest(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    name: str = Field(..., min_length=1, max_length=128)
+    base_url: str = Field(..., pattern=r"^https?://")
+    api_key: str | None = Field(None, min_length=1)
+    tube_write_path: str = Field(..., min_length=1)
+    radarr_import_path: str = Field(..., min_length=1)
+    host_path_hint: str | None = None
+    default_profile_id: str | None = None
+    default_quality_profile_id: int | None = None
+    default_root_folder_path: str | None = None
+    import_mode: str = "move"
+    enabled: bool = True
+
+
+class RadarrInstanceTestRequest(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    base_url: str | None = None
+    api_key: str | None = None
+    tube_write_path: str | None = None
+
+
+class RadarrInstanceTestResponse(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    ok: bool
+    can_connect: bool = False
+    api_key_valid: bool = False
+    tube_write_path_writable: bool = False
+    radarr_root_folders_loaded: bool = False
+    radarr_import_path_visible: bool | None = None
+    radarr_version: str | None = None
+    warnings: list[str] = []
+    errors: list[str] = []
+
+
+class RadarrSummaryResponse(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    total_instances: int
+    active_connections: int
+    missing_movies: int
+    monitored_movies: int
+    imports_24h: int
+    last_sync_at: str | None = None
+    instance_statuses: dict[str, int] = {}
+
+
+class RadarrMissingMovie(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    instance_id: str
+    movie_id: int
+    title: str
+    year: int | None = None
+    tmdb_id: int | None = None
+    imdb_id: str | None = None
+    monitored: bool | None = None
+    has_file: bool | None = None
+    quality_profile_id: int | None = None
+    quality_profile_name: str | None = None
+    root_folder_path: str | None = None
+    movie_path: str | None = None
+    poster_url: str | None = None
+    overview: str | None = None
+    radarr_url: str | None = None
+    local_workflow_status: str | None = None
+    linked_task_id: str | None = None
+
+
+class RadarrMissingMovieListResponse(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    items: list[RadarrMissingMovie]
+    total: int
+    instance: dict | None = None
+
+
+class RadarrMovieDownloadRequest(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    url: str = Field(..., pattern=r"^https?://\S+")
+    instance_id: str | None = None
+    movie_id: int | None = None
+    movie_title: str | None = None
+    movie_year: int | None = None
+    profile_id: str | None = None
+    download_quality_mode: QualityMode | None = None
+    download_quality_value: int | None = None
+    download_format: str | None = None
+    format_type: FormatType | None = None
+    remux_to: str | None = None
+    embed_metadata: bool | None = None
+    embed_thumbnail: bool | None = None
+    subtitles: bool | None = None
+    subtitle_langs: str | None = None
+
+
+class RadarrTaskIntegrationResponse(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    task_id: str
+    radarr_instance_id: str
+    radarr_instance_name: str
+    radarr_movie_id: int
+    title: str
+    year: int | None = None
+    download_status: str
+    import_status: str
+    import_mode: str = "move"
+    local_file_path: str | None = None
+    radarr_file_path: str | None = None
+    radarr_movie_url: str | None = None
+    command_id: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+
+
+class RadarrRootFolder(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    id: int
+    path: str
+    accessible: bool = True
+    free_space: int | None = None
+
+
+class RadarrQualityProfile(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    id: int
+    name: str
+
+
+class RadarrQueueItem(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    movie_id: int
+    movie_title: str
+    status: str
+    size: int | None = None
+    progress: float | None = None
+
+
+class TaskIntegration(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    type: str = "radarr"
+    instance_id: str
+    instance_name: str
+    movie_id: int
+    movie_title: str
+    movie_year: int | None = None
+    import_status: str = "none"
+    import_mode: str | None = None
+    import_error: str | None = None
+    radarr_path: str | None = None
+    local_path: str | None = None
 
 
 class ErrorResponse(BaseModel):

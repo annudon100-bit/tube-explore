@@ -175,3 +175,130 @@ class TaskInfo(BaseModel):
     format_info: list[dict] | None = None
     current_index: int | None = None
     total_items: int | None = None
+    integration: str | None = None
+    integration_meta: dict[str, object] | None = None
+
+
+# ── Radarr models ──────────────────────────────────────────────
+
+
+class RadarrInstance(BaseModel):
+    id: str
+    name: str
+    base_url: str
+    api_key_encrypted: str
+    tube_write_path: str
+    radarr_import_path: str
+    host_path_hint: str | None = None
+    default_profile_id: str | None = None
+    default_quality_profile_id: int | None = None
+    default_root_folder_path: str | None = None
+    import_mode: str = "move"
+    enabled: bool = True
+    is_default: bool = False
+    last_test_status: str | None = None
+    last_test_message: str | None = None
+    last_test_at: datetime | None = None
+    last_sync_status: str | None = None
+    last_sync_message: str | None = None
+    last_sync_at: datetime | None = None
+    radarr_version: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class RadarrInstanceCreate(BaseModel):
+    name: str
+    base_url: str
+    api_key: str
+    tube_write_path: str
+    radarr_import_path: str
+    host_path_hint: str | None = None
+    default_profile_id: str | None = None
+    default_quality_profile_id: int | None = None
+    default_root_folder_path: str | None = None
+    import_mode: str = "move"
+    enabled: bool = True
+    is_default: bool = False
+
+
+class RadarrInstanceUpdate(BaseModel):
+    name: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    tube_write_path: str | None = None
+    radarr_import_path: str | None = None
+    host_path_hint: str | None = None
+    default_profile_id: str | None = None
+    default_quality_profile_id: int | None = None
+    default_root_folder_path: str | None = None
+    import_mode: str | None = None
+    enabled: bool | None = None
+    is_default: bool | None = None
+
+
+class RadarrInstanceStats(BaseModel):
+    radarr_instance_id: str
+    missing_count: int = 0
+    monitored_count: int = 0
+    unmonitored_missing_count: int = 0
+    root_folder_count: int = 0
+    queue_count: int = 0
+    imports_24h: int = 0
+    last_sync_at: datetime | None = None
+    updated_at: datetime
+
+
+class RadarrMissingMovieCache(BaseModel):
+    radarr_instance_id: str
+    movie_id: int
+    title: str
+    year: int | None = None
+    tmdb_id: int | None = None
+    imdb_id: str | None = None
+    monitored: bool | None = None
+    has_file: bool | None = None
+    quality_profile_id: int | None = None
+    quality_profile_name: str | None = None
+    root_folder_path: str | None = None
+    movie_path: str | None = None
+    poster_url: str | None = None
+    overview: str | None = None
+    cached_at: datetime
+
+
+class RadarrDownloadLink(BaseModel):
+    id: str
+    task_id: str
+    radarr_instance_id: str
+    radarr_movie_id: int
+    title: str
+    year: int | None = None
+    tmdb_id: int | None = None
+    imdb_id: str | None = None
+    source_url: str
+    local_staging_dir: str
+    radarr_staging_dir: str
+    local_final_file_path: str | None = None
+    radarr_final_file_path: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class RadarrImportAttempt(BaseModel):
+    id: str
+    task_id: str
+    radarr_instance_id: str
+    radarr_movie_id: int
+    local_file_path: str | None = None
+    radarr_file_path: str | None = None
+    status: str
+    import_mode: str
+    radarr_command_id: str | None = None
+    radarr_movie_file_id: int | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime

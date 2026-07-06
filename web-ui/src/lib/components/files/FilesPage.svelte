@@ -285,7 +285,11 @@
                 </td>
                 <td>
                   <div class="file-cell">
-                    <div class="file-thumb" style="background: {['linear-gradient(135deg, #1f5f99, #5b2ee8)','linear-gradient(135deg, #10a5a7, #2374ff)','linear-gradient(135deg, #0a6a4c, #ffc857)','linear-gradient(135deg, #5f2e89, #ff7a45)','linear-gradient(135deg, #8640ff, #ff4d7e)'][i % 5]}"></div>
+                    <div class="file-thumb" style="background: {['linear-gradient(135deg, #1f5f99, #5b2ee8)','linear-gradient(135deg, #10a5a7, #2374ff)','linear-gradient(135deg, #0a6a4c, #ffc857)','linear-gradient(135deg, #5f2e89, #ff7a45)','linear-gradient(135deg, #8640ff, #ff4d7e)'][i % 5]}">
+                      {#if f.thumbnailUrl}
+                        <img class="thumb-img" src={f.thumbnailUrl} alt="" loading="lazy" />
+                      {/if}
+                    </div>
                     <div>
                       <div class="file-title" title={f.name}>{f.name}</div>
                       <div class="file-path">{f.path}</div>
@@ -321,7 +325,11 @@
       <div class="grid-files" style="display: {gridMode ? 'grid' : 'none'}">
         {#each files as f, i}
           <article class="file-card">
-            <div class="file-thumb" style="background: {['linear-gradient(135deg, #1f5f99, #5b2ee8)','linear-gradient(135deg, #10a5a7, #2374ff)','linear-gradient(135deg, #0a6a4c, #ffc857)','linear-gradient(135deg, #5f2e89, #ff7a45)','linear-gradient(135deg, #8640ff, #ff4d7e)'][i % 5]}"></div>
+            <div class="file-thumb" style="background: {['linear-gradient(135deg, #1f5f99, #5b2ee8)','linear-gradient(135deg, #10a5a7, #2374ff)','linear-gradient(135deg, #0a6a4c, #ffc857)','linear-gradient(135deg, #5f2e89, #ff7a45)','linear-gradient(135deg, #8640ff, #ff4d7e)'][i % 5]}">
+              {#if f.thumbnailUrl}
+                <img class="thumb-img" src={f.thumbnailUrl} alt="" loading="lazy" />
+              {/if}
+            </div>
             <div class="file-title" title={f.name}>{f.name}</div>
             <div class="file-path">{f.path}</div>
             <div class="folder-meta">{f.format} &bull; {bytes(f.size)}</div>
@@ -777,6 +785,14 @@
     position: relative;
     overflow: hidden;
     border: 1px solid rgba(255,255,255,.08);
+  }
+
+  .thumb-img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
   }
 
   .file-title {

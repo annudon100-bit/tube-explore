@@ -18,6 +18,11 @@
   import ProfilesDialog from '$lib/components/profiles/ProfilesDialog.svelte';
   import SettingsDialog from '$lib/components/settings/SettingsDialog.svelte';
   import HealthDialog from '$lib/components/settings/HealthDialog.svelte';
+  import RadarrInstances from '$lib/components/radarr/RadarrInstances.svelte';
+  import RadarrInstanceForm from '$lib/components/radarr/RadarrInstanceForm.svelte';
+  import RadarrSettings from '$lib/components/radarr/RadarrSettings.svelte';
+  import MissingMovies from '$lib/components/radarr/MissingMovies.svelte';
+  import RadarrSearchContext from '$lib/components/radarr/RadarrSearchContext.svelte';
   import { searchMedia } from '$lib/api/search';
   import { getMetadata } from '$lib/api/metadata';
   import { getPlaylist } from '$lib/api/playlist';
@@ -27,7 +32,7 @@
   import type { HealthResponse, MetadataResponse, PlaylistResponse, ProfileResponse, SearchResponse, TaskResponse } from '$lib/api/types';
   import { connectEventStream, disconnectEventStream } from '$lib/state/event-stream';
 
-  let currentPage: 'home' | 'downloads' | 'files' = 'home';
+  let currentPage: string = 'home';
   let health: HealthResponse | null = null;
   let profiles: ProfileResponse[] = [];
   let busy = false;
@@ -38,10 +43,12 @@
   let searchResult: SearchResponse | null = null;
   let metadata: MetadataResponse | null = null;
   let playlist: PlaylistResponse | null = null;
+  let pageData: Record<string, any> = {};
   let transitioning = false;
 
-  function navigate(page: string) {
-    if (page === 'home' || page === 'downloads' || page === 'files') {
+  function navigate(page: string, data?: any) {
+    if (page === 'home' || page === 'downloads' || page === 'files' || page.startsWith('radarr-') || page === 'missing-movies') {
+      if (data) pageData = data;
       currentPage = page;
     }
   }
@@ -116,6 +123,16 @@
     <DownloadsPage onOpen={openDialog} onTask={handleTask} />
   {:else if currentPage === 'files'}
     <FilesPage />
+  {:else if currentPage === 'radarr-instances'}
+    <RadarrInstances {navigate} />
+  {:else if currentPage === 'radarr-instance-form'}
+    <RadarrInstanceForm {navigate} instance={pageData.instance ?? null} />
+  {:else if currentPage === 'radarr-settings'}
+    <RadarrSettings {navigate} />
+  {:else if currentPage === 'missing-movies'}
+    <MissingMovies {navigate} instance={pageData.instance ?? null} />
+  {:else if currentPage === 'radarr-search-context'}
+    <RadarrSearchContext {navigate} instance={pageData.instance} movie={pageData.movie} presetUrl={pageData.presetUrl || ''} />
   {/if}
 </AppShell>
 

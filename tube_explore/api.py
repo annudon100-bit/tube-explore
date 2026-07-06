@@ -2,9 +2,11 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -23,7 +25,14 @@ from fastapi.staticfiles import StaticFiles
 
 from tube_explore import config, db, ytdlp
 from tube_explore.ytdlp import PauseError
-from tube_explore.models import Profile, ProfileCreate, ProfileUpdate, TaskInfo
+from tube_explore.models import (
+    Profile,
+    ProfileCreate,
+    ProfileUpdate,
+    TaskInfo,
+    RadarrInstanceCreate,
+    RadarrInstanceUpdate,
+)
 from tube_explore.schemas import (
     DownloadedFile,
     DownloadPlaylistRequest,
@@ -42,15 +51,20 @@ from tube_explore.schemas import (
     ProfileCreateRequest,
     ProfileResponse,
     ProfileUpdateRequest,
+    RadarrInstanceTestRequest,
+    RadarrInstanceUpsertRequest,
+    RadarrMovieDownloadRequest,
     SearchResponse,
     SearchResult,
     SettingsResponse,
     SettingsUpdateRequest,
+    TaskIntegration,
     TaskResponse,
     classify_file_extension,
     classify_file_format,
     classify_file_type,
 )
+from tube_explore.radarr_client import RadarrClient, RadarrError
 
 _404: dict[int | str, dict[str, Any]] = {404: {"model": ErrorResponse, "description": "Resource not found"}}
 _409: dict[int | str, dict[str, Any]] = {409: {"model": ErrorResponse, "description": "Conflict"}}
@@ -121,6 +135,10 @@ app = FastAPI(
         {
             "name": "Health",
             "description": "Service health check.",
+        },
+        {
+            "name": "Radarr",
+            "description": "Radarr integration: manage instances, missing movies, imports, and linked downloads.",
         },
     ],
 )
@@ -193,8 +211,25 @@ def _create_task(task_type: str, url: str, params: dict[str, object]) -> str:
     )
     with _lock:
         _tasks[tid] = task
-    _broadcast("task_created", TaskResponse(**task.model_dump()).model_dump(mode="json", by_alias=True))
+    _broadcast("task_created", _task_to_response(task))
     return tid
+
+
+def _camel_to_snake(name: str) -> str:
+    return re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower()
+
+
+def _task_to_response(task: TaskInfo) -> dict[str, object]:
+    dump = task.model_dump()
+    integration_val = dump.pop("integration", None)
+    meta = dump.pop("integration_meta", None)
+    if integration_val and meta and isinstance(meta, dict):
+        normalized: dict[str, object] = {}
+        for k, v in meta.items():
+            normalized[_camel_to_snake(k)] = v
+        normalized.setdefault("movie_title", "Unknown")
+        dump["integration"] = TaskIntegration(type=integration_val, **normalized)
+    return TaskResponse(**dump).model_dump(mode="json", by_alias=True)
 
 
 def _update_task(tid: str, **kwargs):
@@ -209,7 +244,7 @@ def _update_task(tid: str, **kwargs):
         new_kwargs = kwargs | extra
         task = task.model_copy(update=new_kwargs)
         _tasks[tid] = task
-        data = TaskResponse(**task.model_dump()).model_dump(mode="json", by_alias=True)
+        data = _task_to_response(task)
     logger.info("_update_task: kwargs=%s data_speed=%s data_eta=%s data_totalBytes=%s", new_kwargs, data.get("speed"), data.get("eta"), data.get("totalBytes"))
     _broadcast("task_updated", data)
 
@@ -315,6 +350,7 @@ def _run_in_background(tid: str, fn, *args, url: str | None = None, metadata_fet
             files = result.get("files")
             if files:
                 _update_task(tid, status="completed", result=files, progress_percent=100)
+                _radarr_import_download(tid, files)
             else:
                 _update_task(tid, status="completed", progress_percent=100)
         except PauseError:
@@ -331,6 +367,90 @@ def _run_in_background(tid: str, fn, *args, url: str | None = None, metadata_fet
 
 
 # ── Helpers ──────────────────────────────────────────────────
+
+
+def _radarr_import_download(tid: str, files: list[dict]):
+    """After a Radarr-linked download completes, copy the file into the
+    movie's subdirectory under tube_write_path, trigger a refresh+rescan,
+    then query Radarr for the final movie file path."""
+    with _lock:
+        task = _tasks.get(tid)
+        if not task or task.integration != "radarr":
+            return
+        meta = dict(task.integration_meta or {})
+    inst_id = meta.get("instanceId") or meta.get("instance_id", "")
+    movie_id = meta.get("movieId") or meta.get("movie_id", 0)
+    if not inst_id or not movie_id:
+        logger.info("radarr_import: no instance_id or movie_id in meta=%s", meta)
+        return
+
+    inst = _get_radarr_instance(inst_id)
+    if not inst:
+        return
+    if not files:
+        return
+
+    local_path = files[0].get("path", "") if isinstance(files[0], dict) else str(files[0])
+    if not local_path:
+        logger.info("radarr_import: no file path in result files=%s", files)
+        return
+
+    meta["importStatus"] = "importing"
+    _update_task(tid, integration_meta=meta)
+
+    try:
+        client = RadarrClient(inst.base_url, inst.api_key_encrypted)
+        movie = client.get_movie(int(movie_id))
+        movie_path = movie.get("path", "")
+        if not movie_path:
+            raise RuntimeError(f"Radarr movie {movie_id} has no path")
+
+        # Derive relative subdirectory from movie's Radarr-side path
+        radarr_base = inst.radarr_import_path.rstrip("/")
+        subdir = movie_path
+        if radarr_base and movie_path.startswith(radarr_base):
+            subdir = movie_path[len(radarr_base):].lstrip("/")
+        tube_dest_dir = os.path.join(inst.tube_write_path, subdir)
+        dest = os.path.join(tube_dest_dir, os.path.basename(local_path))
+
+        os.makedirs(tube_dest_dir, exist_ok=True)
+        shutil.copy2(local_path, dest)
+        logger.info("radarr_import: copied %s → %s", local_path, dest)
+
+        meta["localPath"] = local_path
+        meta["importStatus"] = "waiting_for_import"
+        _update_task(tid, integration_meta=meta)
+    except Exception as e:
+        logger.error("radarr_import: copy failed: %s", e)
+        meta["importStatus"] = "failed"
+        meta["importError"] = f"copy_error: {e}"
+        _update_task(tid, integration_meta=meta)
+        _broadcast("radarr_import_updated", {"taskId": tid, "importStatus": "failed"})
+        return
+
+    try:
+        cmd = client.create_command("RefreshMovie", movieId=int(movie_id))
+        cmd_id = cmd.get("id", "")
+        logger.info("radarr_import: RefreshMovie command=%s", cmd_id)
+
+        # Query Radarr for the actual movie file path after import
+        time.sleep(3)
+        updated = client.get_movie(int(movie_id))
+        if updated.get("hasFile") and updated.get("movieFile"):
+            mf_path = updated["movieFile"].get("path") or updated["movieFile"].get("relativePath", "")
+            if mf_path:
+                meta["radarrPath"] = mf_path
+
+        meta["importStatus"] = "imported"
+        meta["radarrCommandId"] = str(cmd_id)
+        _update_task(tid, integration_meta=meta)
+        _broadcast("radarr_import_updated", {"taskId": tid, "importStatus": "imported"})
+    except Exception as e:
+        logger.error("radarr_import: trigger failed: %s", e)
+        meta["importStatus"] = "failed"
+        meta["importError"] = f"trigger_error: {e}"
+        _update_task(tid, integration_meta=meta)
+        _broadcast("radarr_import_updated", {"taskId": tid, "importStatus": "failed"})
 
 
 def _normalize_rel_path(path: str) -> str:
@@ -484,13 +604,13 @@ def download_playlist(body: DownloadPlaylistRequest):
 # ── Tasks ────────────────────────────────────────────────────
 
 
-@app.get("/api/tasks/{task_id}", response_model=TaskResponse, responses=_404, summary="Get task status", description="Poll the status of a background download task by its ID. Returns the current status (pending/running/completed/failed), type, URL, timestamps, and error if any.", tags=["Tasks"])
+@app.get("/api/tasks/{task_id}", responses=_404, summary="Get task status", description="Poll the status of a background download task by its ID. Returns the current status (pending/running/completed/failed), type, URL, timestamps, and error if any.", tags=["Tasks"])
 def get_task(task_id: str):
     with _lock:
         task = _tasks.get(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
-    return task
+    return _task_to_response(task)
 
 
 @app.get("/api/events", summary="Global event stream", description="Persistent SSE connection that streams all task lifecycle events: snapshot, task_created, task_updated. Sends keepalive every 30s.", tags=["Tasks"])
@@ -500,7 +620,7 @@ async def event_stream():
     async def event_gen():
         try:
             with _lock:
-                tasks_data = [TaskResponse(**t.model_dump()).model_dump(mode="json", by_alias=True) for t in _tasks.values()]
+                tasks_data = [_task_to_response(t) for t in _tasks.values()]
             yield f"event: snapshot\ndata: {json.dumps({'tasks': tasks_data})}\n\n"
             while True:
                 try:
@@ -794,7 +914,8 @@ def list_files(
     sort_by: str | None = Query(None, alias="sortBy", description="Sort field: name, size, created_at (default: newest first)"),
     sort_order: str | None = Query("desc", alias="sortOrder", description="Sort direction: asc or desc"),
 ):
-    results: list[FileInfo] = []
+    download_base = config.get_download_dir().rstrip("/")
+    seen: dict[tuple, FileInfo] = {}
     with _lock:
         tasks = list(_tasks.values())
     for task in tasks:
@@ -804,15 +925,20 @@ def list_files(
         if task.thumbnail_path:
             thumbnail_base = task.thumbnail_path
         for f in (task.result or []):
-            file_type_val = f.get("fileType") or classify_file_type(f.get("path", ""))
-            fmt = f.get("format") or classify_file_format(f.get("path", ""))
-            ext = f.get("fileExtension") or classify_file_extension(f.get("path", ""))
+            fp = f.get("path", "")
+            # Skip internal Radarr import copies (files written under a radarr/ subdirectory)
+            rel = fp[len(download_base):].lstrip("/") if fp.startswith(download_base) else fp
+            if rel.startswith("radarr/"):
+                continue
+            file_type_val = f.get("fileType") or classify_file_type(fp)
+            fmt = f.get("format") or classify_file_format(fp)
+            ext = f.get("fileExtension") or classify_file_extension(fp)
             detail = f.get("detail") or fmt
-            results.append(FileInfo(
+            fi = FileInfo(
                 id=f.get("id", str(uuid.uuid4())),
                 name=f["name"],
                 size=f["size"],
-                path=f["path"],
+                path=fp,
                 file_type=file_type_val,
                 format=fmt,
                 detail=detail,
@@ -821,7 +947,12 @@ def list_files(
                 source_url=task.url,
                 created_at=task.completed_at or task.created_at,
                 thumbnail_url=thumbnail_base,
-            ))
+            )
+            # Dedup by (name, size) — same content produces same tuple
+            key = (f["name"], f["size"])
+            if key not in seen:
+                seen[key] = fi
+    results = list(seen.values())
     # Apply search filter
     if search:
         term = search.lower()
@@ -895,6 +1026,649 @@ def file_stats():
             for ft, stats in categories.items()
         ],
     )
+
+
+# ── Task list / extended task endpoints ────────────────────────
+
+
+@app.get("/api/tasks", summary="List all tasks", description="List all download tasks with optional filtering. Supports pagination, status filter, integration filter, and sorting.", tags=["Tasks"])
+def list_tasks(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    status: str | None = Query(None, description="Filter by status: pending, running, completed, failed, cancelled, paused"),
+    search: str | None = Query(None, description="Search in title or URL"),
+    integration: str | None = Query(None, description="Integration: all, none, radarr"),
+    sort_by: str | None = Query(None, alias="sortBy", description="Sort field: created_at, title, status, progress"),
+    sort_order: str | None = Query("desc", alias="sortOrder"),
+):
+    with _lock:
+        tasks = list(_tasks.values())
+
+    results = [_task_to_response(t) for t in tasks]
+
+    if status:
+        results = [t for t in results if t["status"] == status]
+    if search:
+        term = search.lower()
+        results = [t for t in results if (t.get("title") or "").lower().find(term) >= 0 or t.get("url", "").lower().find(term) >= 0]
+    if integration == "radarr":
+        results = [t for t in results if t.get("integration") and t["integration"].get("type") == "radarr"]
+    elif integration == "none":
+        results = [t for t in results if not t.get("integration")]
+
+    if sort_by == "title":
+        results.sort(key=lambda t: (t.get("title") or "").lower(), reverse=(sort_order == "desc"))
+    elif sort_by == "status":
+        results.sort(key=lambda t: t.get("status", ""), reverse=(sort_order == "desc"))
+    elif sort_by == "progress":
+        results.sort(key=lambda t: t.get("progressPercent", 0), reverse=(sort_order == "desc"))
+    else:
+        results.sort(key=lambda t: t.get("createdAt", ""), reverse=(sort_order == "desc"))
+
+    total = len(results)
+    return {"items": results[offset:][:limit], "total": total}
+
+
+@app.delete("/api/tasks/{task_id}", responses=_404, summary="Delete task", description="Remove a completed task from the task list.", tags=["Tasks"])
+def delete_task(task_id: str):
+    with _lock:
+        task = _tasks.get(task_id)
+        if not task:
+            raise HTTPException(404, "Task not found")
+        if task.status not in ("completed", "failed", "cancelled"):
+            raise HTTPException(409, f"Cannot delete task in status '{task.status}'")
+        del _tasks[task_id]
+    return OkResponse(ok=True)
+
+
+@app.get("/api/tasks/{task_id}/logs", responses=_404, summary="Task logs", description="Get log entries for a specific task.", tags=["Tasks"])
+def get_task_logs(task_id: str):
+    with _lock:
+        task = _tasks.get(task_id)
+        if not task:
+            raise HTTPException(404, "Task not found")
+    return {"taskId": task_id, "logs": []}
+
+
+@app.get("/api/tasks/{task_id}/files", response_model=FilesListResponse, responses=_404, summary="Task files", description="Get files associated with a specific task.", tags=["Tasks"])
+def get_task_files(task_id: str):
+    with _lock:
+        task = _tasks.get(task_id)
+        if not task:
+            raise HTTPException(404, "Task not found")
+    files = []
+    if task.result:
+        for f in task.result:
+            files.append(FileInfo(
+                id=f.get("id", str(uuid.uuid4())),
+                name=f["name"],
+                size=f["size"],
+                path=f["path"],
+                file_type=f.get("fileType", classify_file_type(f.get("path", ""))),
+                format=f.get("format", classify_file_format(f.get("path", ""))),
+                detail=f.get("detail", classify_file_format(f.get("path", ""))),
+                file_extension=f.get("fileExtension", classify_file_extension(f.get("path", ""))),
+                task_id=task.id,
+                source_url=task.url,
+                created_at=task.completed_at or task.created_at,
+                thumbnail_url=task.thumbnail_path,
+            ))
+    return FilesListResponse(items=files, total=len(files))
+
+
+# ── Extended file endpoints ────────────────────────────────────
+
+
+@app.get("/api/files/{file_id}", summary="Get file detail", description="Get detailed information about a specific file including Radarr import state.", tags=["Files"])
+def get_file_detail(file_id: str):
+    with _lock:
+        tasks_data = list(_tasks.values())
+    for task in tasks_data:
+        if task.status != "completed":
+            continue
+        for f in (task.result or []):
+            if f.get("id") == file_id:
+                return FileInfo(
+                    id=file_id,
+                    name=f["name"],
+                    size=f["size"],
+                    path=f["path"],
+                    file_type=f.get("fileType", classify_file_type(f.get("path", ""))),
+                    format=f.get("format", classify_file_format(f.get("path", ""))),
+                    detail=f.get("detail", classify_file_format(f.get("path", ""))),
+                    file_extension=f.get("fileExtension", classify_file_extension(f.get("path", ""))),
+                    task_id=task.id,
+                    source_url=task.url,
+                    created_at=task.completed_at or task.created_at,
+                    thumbnail_url=task.thumbnail_path,
+                    storage_state="local" if os.path.isfile(f["path"]) else "missing",
+                    downloadable=os.path.isfile(f["path"]),
+                )
+    raise HTTPException(404, "File not found")
+
+
+@app.delete("/api/files/{file_id}", responses=_404, summary="Delete file", description="Delete a downloaded file from disk and remove it from the file list.", tags=["Files"])
+def delete_file(file_id: str):
+    with _lock:
+        tasks_data = list(_tasks.values())
+    for task in tasks_data:
+        if task.status != "completed":
+            continue
+        if task.result:
+            for i, f in enumerate(task.result):
+                if f.get("id") == file_id:
+                    path = f["path"]
+                    if os.path.isfile(path):
+                        os.remove(path)
+                    task.result.pop(i)
+                    _update_task(task.id, result=task.result)
+                    return OkResponse(ok=True)
+    raise HTTPException(404, "File not found")
+
+
+@app.post("/api/files/{file_id}/reveal", responses={**_404, 409: {"model": ErrorResponse}}, summary="Reveal file in folder", description="Open the containing folder in the file manager. Only available in local desktop deployments.", tags=["Files"])
+def reveal_file(file_id: str):
+    raise HTTPException(409, "Reveal in folder is not available in this deployment")
+
+
+# ── Radarr API ─────────────────────────────────────────────────
+
+
+def _get_radarr_instance(instance_id: str):
+    inst = db.get_radarr_instance(instance_id)
+    if not inst:
+        raise HTTPException(404, f"Radarr instance '{instance_id}' not found")
+    return inst
+
+
+def _instance_to_response(inst) -> dict:
+    preview = (inst.api_key_encrypted[:8] + "…") if inst.api_key_encrypted else ""
+    status = "disabled"
+    health_message = None
+    if inst.enabled:
+        if inst.last_test_status == "ok":
+            status = "connected"
+        elif inst.last_test_status == "warning":
+            status = "warning"
+        elif inst.last_test_status == "error":
+            status = "error"
+            health_message = inst.last_test_message
+        else:
+            status = "unknown"
+    return dict(
+        id=inst.id,
+        name=inst.name,
+        baseUrl=inst.base_url,
+        apiKeyPreview=preview,
+        tubeWritePath=inst.tube_write_path,
+        radarrImportPath=inst.radarr_import_path,
+        hostPathHint=inst.host_path_hint,
+        defaultProfileId=inst.default_profile_id,
+        defaultQualityProfileId=inst.default_quality_profile_id,
+        defaultRootFolderPath=inst.default_root_folder_path,
+        importMode=inst.import_mode,
+        enabled=inst.enabled,
+        isDefault=inst.is_default,
+        status=status,
+        healthMessage=health_message,
+        radarrVersion=inst.radarr_version,
+        lastSyncAt=inst.last_sync_at.isoformat() if inst.last_sync_at else None,
+        lastTestAt=inst.last_test_at.isoformat() if inst.last_test_at else None,
+        createdAt=inst.created_at.isoformat() if inst.created_at else None,
+        updatedAt=inst.updated_at.isoformat() if inst.updated_at else None,
+    )
+
+
+def _make_radarr_client(instance_id: str) -> RadarrClient:
+    inst = _get_radarr_instance(instance_id)
+    if not inst.enabled:
+        raise HTTPException(400, f"Radarr instance '{inst.name}' is disabled")
+    return RadarrClient(inst.base_url, inst.api_key_encrypted)
+
+
+@app.get("/api/radarr/instances", summary="List Radarr instances", description="Get all configured Radarr instances with status and stats.", tags=["Radarr"])
+def list_radarr_instances():
+    instances = db.list_radarr_instances()
+    return [_instance_to_response(i) for i in instances]
+
+
+@app.get("/api/radarr/instances/{instance_id}", summary="Get Radarr instance", description="Get a single Radarr instance by ID.", tags=["Radarr"])
+def get_radarr_instance(instance_id: str):
+    inst = _get_radarr_instance(instance_id)
+    return _instance_to_response(inst)
+
+
+@app.post("/api/radarr/instances", response_model=dict, status_code=201, responses={409: {"model": ErrorResponse}}, summary="Create Radarr instance", description="Add a new Radarr instance connection.", tags=["Radarr"])
+def create_radarr_instance(body: RadarrInstanceUpsertRequest):
+    existing = db.get_radarr_instance_by_name(body.name)
+    if existing:
+        raise HTTPException(409, f"Radarr instance '{body.name}' already exists")
+    if not body.api_key:
+        raise HTTPException(400, "API key is required")
+    data = RadarrInstanceCreate(
+        name=body.name,
+        base_url=body.base_url,
+        api_key=body.api_key,
+        tube_write_path=body.tube_write_path,
+        radarr_import_path=body.radarr_import_path,
+        host_path_hint=body.host_path_hint,
+        default_profile_id=body.default_profile_id,
+        default_quality_profile_id=body.default_quality_profile_id,
+        default_root_folder_path=body.default_root_folder_path,
+        import_mode=body.import_mode,
+        enabled=body.enabled,
+    )
+    inst = db.create_radarr_instance(data)
+    return _instance_to_response(inst)
+
+
+@app.patch("/api/radarr/instances/{instance_id}", responses=_404, summary="Update Radarr instance", description="Update an existing Radarr instance.", tags=["Radarr"])
+def update_radarr_instance(instance_id: str, body: dict):
+    _get_radarr_instance(instance_id)
+    update = RadarrInstanceUpdate(
+        name=body.get("name"),
+        base_url=body.get("baseUrl"),
+        api_key=body.get("apiKey"),
+        tube_write_path=body.get("tubeWritePath"),
+        radarr_import_path=body.get("radarrImportPath"),
+        host_path_hint=body.get("hostPathHint"),
+        default_profile_id=body.get("defaultProfileId"),
+        default_quality_profile_id=body.get("defaultQualityProfileId"),
+        default_root_folder_path=body.get("defaultRootFolderPath"),
+        import_mode=body.get("importMode"),
+        enabled=body.get("enabled"),
+        is_default=body.get("isDefault"),
+    )
+    result = db.update_radarr_instance(instance_id, update)
+    if not result:
+        raise HTTPException(404, "Instance not found after update")
+    return _instance_to_response(result)
+
+
+@app.delete("/api/radarr/instances/{instance_id}", responses=_404, summary="Delete Radarr instance", description="Remove a Radarr instance configuration.", tags=["Radarr"])
+def delete_radarr_instance(instance_id: str):
+    _get_radarr_instance(instance_id)
+    db.delete_radarr_instance(instance_id)
+    return OkResponse(ok=True)
+
+
+@app.post("/api/radarr/instances/{instance_id}/test", summary="Test Radarr connection", description="Test connection, API key, path writability, and root folder access for a Radarr instance.", tags=["Radarr"])
+def test_radarr_instance(instance_id: str, body: RadarrInstanceTestRequest | None = None):
+    base_url = body.base_url if body else None
+    api_key = body.api_key if body else None
+    write_path = body.tube_write_path if body else None
+
+    test_base_url = None
+    test_api_key = None
+    test_write_path = None
+
+    if base_url and api_key:
+        test_base_url = base_url
+        test_api_key = api_key
+        test_write_path = write_path
+    else:
+        inst = _get_radarr_instance(instance_id)
+        test_base_url = inst.base_url
+        test_api_key = inst.api_key_encrypted
+        test_write_path = inst.tube_write_path
+
+    warnings_list = []
+    errors_list = []
+
+    try:
+        client = RadarrClient(test_base_url, test_api_key)
+        can_ping = client.ping()
+        status_data = client.get_system_status()
+        version = status_data.get("version", "unknown")
+    except RadarrError as e:
+        version = None
+        db.set_radarr_instance_test_result(instance_id, "error", str(e))
+        return dict(
+            ok=False, canConnect=False, apiKeyValid=False,
+            tubeWritePathWritable=False, radarrRootFoldersLoaded=False,
+            radarrVersion=None, warnings=warnings_list, errors=[str(e)],
+        )
+
+    can_connect = can_ping
+    api_key_valid = can_connect
+
+    tube_writable = False
+    if test_write_path:
+        try:
+            test_file = os.path.join(test_write_path, f".tube_test_{uuid.uuid4().hex[:8]}")
+            os.makedirs(test_write_path, exist_ok=True)
+            with open(test_file, "w") as f:
+                f.write("test")
+            os.remove(test_file)
+            tube_writable = True
+        except OSError as e:
+            errors_list.append(f"Tube Explore write path not writable: {e}")
+
+    root_folders_loaded = False
+    try:
+        root_folders = client.get_root_folders()
+        root_folders_loaded = True
+    except Exception as e:
+        warnings_list.append(f"Could not load root folders: {e}")
+
+    ok_flag = can_connect and api_key_valid and tube_writable
+    status = "ok" if ok_flag else "warning" if can_connect else "error"
+
+    db.set_radarr_instance_test_result(instance_id, status, str(errors_list[0]) if errors_list else None, version)
+
+    return dict(
+        ok=ok_flag,
+        canConnect=can_connect,
+        apiKeyValid=api_key_valid,
+        tubeWritePathWritable=tube_writable,
+        radarrRootFoldersLoaded=root_folders_loaded,
+        radarrVersion=version,
+        warnings=warnings_list,
+        errors=errors_list,
+    )
+
+
+@app.post("/api/radarr/instances/{instance_id}/sync", summary="Sync Radarr instance", description="Trigger a sync for a Radarr instance. Updates stats, missing movie cache, and instance health.", tags=["Radarr"])
+def sync_radarr_instance(instance_id: str):
+    inst = _get_radarr_instance(instance_id)
+    if not inst.enabled:
+        raise HTTPException(400, f"Instance '{inst.name}' is disabled")
+    try:
+        client = RadarrClient(inst.base_url, inst.api_key_encrypted)
+        status_data = client.get_system_status()
+        version = status_data.get("version", inst.radarr_version)
+
+        root_folders = client.get_root_folders()
+        quality_profiles = client.get_quality_profiles()
+
+        all_movies = client.get_missing_movies()
+        movies = all_movies if isinstance(all_movies, list) else all_movies.get("records", [])
+
+        missing = [m for m in movies if not m.get("hasFile", True)]
+        monitored = [m for m in movies if m.get("monitored", False)]
+
+        db.upsert_radarr_instance_stats(instance_id, {
+            "missing_count": len(missing),
+            "monitored_count": len(monitored),
+            "unmonitored_missing_count": len([m for m in missing if not m.get("monitored", False)]),
+            "root_folder_count": len(root_folders),
+            "queue_count": 0,
+            "imports_24h": 0,
+        })
+
+        db.set_radarr_instance_sync_result(instance_id, "ok")
+        if inst.radarr_version != version:
+            db.set_radarr_instance_test_result(instance_id, "ok", None, version)
+
+        _broadcast("radarr_sync_completed", {"instanceId": instance_id, "instanceName": inst.name})
+
+        return _instance_to_response(db.get_radarr_instance(instance_id))
+    except RadarrError as e:
+        db.set_radarr_instance_sync_result(instance_id, "error", str(e))
+        _broadcast("radarr_sync_failed", {"instanceId": instance_id, "instanceName": inst.name, "error": str(e)})
+        raise HTTPException(500, f"Sync failed: {e}")
+
+
+@app.post("/api/radarr/download", response_model=DownloadTaskCreatedResponse, status_code=202, responses=_500, summary="Download for Radarr", description="Download a video and link it to a Radarr movie for import.", tags=["Radarr"])
+def radarr_download(body: RadarrMovieDownloadRequest):
+    inst = None
+    if body.instance_id:
+        inst = _get_radarr_instance(body.instance_id)
+    settings = db.get_all_settings()
+    download_base = config.get_download_dir()
+    temp_dir = settings.get("temp_directory", "").strip() or "/temp"
+
+    params = body.model_dump(by_alias=True)
+    tid = _create_task("video", body.url, params)
+    with _lock:
+        task = _tasks.get(tid)
+        if task:
+            integration_meta: dict[str, object] = {}
+            if inst:
+                integration_meta = {
+                    "instanceId": inst.id,
+                    "instanceName": inst.name,
+                }
+            if body.movie_id:
+                integration_meta["movieId"] = body.movie_id
+            if body.movie_title:
+                integration_meta["movieTitle"] = body.movie_title
+            if body.movie_year:
+                integration_meta["movieYear"] = body.movie_year
+            task = task.model_copy(update={
+                "integration": "radarr",
+                "integration_meta": integration_meta,
+            })
+            _tasks[tid] = task
+    _run_in_background(
+        tid, ytdlp.download_video, body.url,
+        url=body.url,
+        output_dir=download_base,
+        profile=_resolve_profile(body.profile_id, body),
+        settings=settings,
+        task_id=tid,
+        download_base=download_base,
+        temp_dir=temp_dir,
+    )
+    return DownloadTaskCreatedResponse(task_id=tid, status="pending", status_url=f"/api/tasks/{tid}")
+
+
+@app.post("/api/radarr/instances/{instance_id}/set-default", responses=_404, summary="Set default Radarr instance", description="Set a Radarr instance as the default.", tags=["Radarr"])
+def set_default_radarr_instance(instance_id: str):
+    _get_radarr_instance(instance_id)
+    db.update_radarr_instance(instance_id, RadarrInstanceUpdate(is_default=True))
+    return OkResponse(ok=True)
+
+
+@app.get("/api/radarr/summary", summary="Radarr summary", description="Aggregate Radarr summary for the overview page.", tags=["Radarr"])
+def radarr_summary():
+    instances = db.list_radarr_instances()
+    total = len(instances)
+    active = sum(1 for i in instances if i.enabled and i.last_test_status == "ok")
+    missing = 0
+    monitored = 0
+    imports_24h = 0
+    statuses: dict[str, int] = {}
+    last_sync = None
+
+    for inst in instances:
+        stats_key = inst.last_test_status or "unknown"
+        statuses[stats_key] = statuses.get(stats_key, 0) + 1
+        if inst.last_sync_at and (last_sync is None or inst.last_sync_at > last_sync):
+            last_sync = inst.last_sync_at
+
+    return dict(
+        totalInstances=total,
+        activeConnections=active,
+        missingMovies=missing,
+        monitoredMovies=monitored,
+        imports24h=imports_24h,
+        lastSyncAt=last_sync.isoformat() if last_sync else None,
+        instanceStatuses=statuses,
+    )
+
+
+@app.get("/api/radarr/instances/{instance_id}/missing", summary="List missing movies", description="Get missing movies for a Radarr instance.", tags=["Radarr"])
+def list_missing_movies(
+    instance_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    search: str | None = Query(None),
+    monitored: str | None = Query(None, description="all, monitored, unmonitored"),
+    sort_by: str | None = Query(None, alias="sortBy"),
+    sort_order: str | None = Query("asc", alias="sortOrder"),
+):
+    inst = _get_radarr_instance(instance_id)
+    if not inst.enabled:
+        raise HTTPException(400, f"Radarr instance '{inst.name}' is disabled")
+    try:
+        client = RadarrClient(inst.base_url, inst.api_key_encrypted)
+        all_movies = client.get_missing_movies()
+        movies = all_movies if isinstance(all_movies, list) else all_movies.get("records", [])
+
+        results = []
+        for m in movies:
+            if m.get("hasFile", False):
+                continue
+            results.append(dict(
+                instanceId=instance_id,
+                movieId=m["id"],
+                title=m.get("title", "Unknown"),
+                year=m.get("year"),
+                tmdbId=m.get("tmdbId"),
+                imdbId=m.get("imdbId"),
+                monitored=m.get("monitored", False),
+                hasFile=m.get("hasFile", False),
+                qualityProfileId=m.get("qualityProfileId"),
+                qualityProfileName=None,
+                rootFolderPath=m.get("rootFolderPath"),
+                moviePath=m.get("path"),
+                posterUrl=m.get("images", [{}])[0].get("remoteUrl") if m.get("images") else None,
+                overview=m.get("overview"),
+                radarrUrl=f"{inst.base_url.rstrip('/')}/movie/{m.get('id')}",
+            ))
+
+        if search:
+            term = search.lower()
+            results = [r for r in results if term in r["title"].lower() or (r.get("overview") or "").lower().find(term) >= 0]
+        if monitored == "monitored":
+            results = [r for r in results if r.get("monitored")]
+        elif monitored == "unmonitored":
+            results = [r for r in results if not r.get("monitored")]
+
+        if sort_by == "year":
+            results.sort(key=lambda r: r.get("year") or 0, reverse=(sort_order == "desc"))
+        elif sort_by == "qualityProfile":
+            results.sort(key=lambda r: r.get("qualityProfileName") or "", reverse=(sort_order == "desc"))
+        else:
+            results.sort(key=lambda r: r["title"].lower(), reverse=(sort_order == "desc"))
+
+        total = len(results)
+        return dict(
+            items=results[offset:][:limit],
+            total=total,
+            instance=dict(id=inst.id, name=inst.name, baseUrl=inst.base_url, status=inst.last_test_status),
+        )
+    except RadarrError as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/radarr/instances/{instance_id}/root-folders", summary="List root folders", description="Get Radarr root folders for an instance.", tags=["Radarr"])
+def list_root_folders(instance_id: str):
+    client = _make_radarr_client(instance_id)
+    try:
+        folders = client.get_root_folders()
+        return [dict(id=f["id"], path=f["path"], accessible=True, freeSpace=f.get("freeSpace")) for f in folders]
+    except RadarrError as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/radarr/instances/{instance_id}/quality-profiles", summary="List quality profiles", description="Get Radarr quality profiles for an instance.", tags=["Radarr"])
+def list_quality_profiles(instance_id: str):
+    client = _make_radarr_client(instance_id)
+    try:
+        profiles = client.get_quality_profiles()
+        return [dict(id=p["id"], name=p["name"]) for p in profiles]
+    except RadarrError as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/radarr/instances/{instance_id}/queue", summary="Get queue", description="Get the Radarr queue for an instance.", tags=["Radarr"])
+def get_radarr_queue(instance_id: str):
+    client = _make_radarr_client(instance_id)
+    try:
+        queue = client.get_queue()
+        items = queue if isinstance(queue, list) else queue.get("records", [])
+        return [dict(movieId=i.get("movieId"), movieTitle=i.get("title", ""), status=i.get("status", "")) for i in items]
+    except RadarrError as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/radarr/instances/{instance_id}/sync-history", summary="Get sync history", description="Get sync history for a Radarr instance.", tags=["Radarr"])
+def get_sync_history(instance_id: str):
+    _get_radarr_instance(instance_id)
+    return {"instanceId": instance_id, "history": []}
+
+
+@app.get("/api/radarr/instances/{instance_id}/test-results", summary="Get test results", description="Get the last test result for a Radarr instance.", tags=["Radarr"])
+def get_test_results(instance_id: str):
+    inst = _get_radarr_instance(instance_id)
+    return dict(
+        instanceId=inst.id,
+        name=inst.name,
+        lastTestStatus=inst.last_test_status,
+        lastTestMessage=inst.last_test_message,
+        lastTestAt=inst.last_test_at.isoformat() if inst.last_test_at else None,
+        radarrVersion=inst.radarr_version,
+    )
+
+
+@app.get("/api/radarr/tasks/{task_id}", summary="Get Radarr task integration", description="Get Radarr integration details for a specific task.", tags=["Radarr"])
+def get_radarr_task(task_id: str):
+    with _lock:
+        task = _tasks.get(task_id)
+        if not task:
+            raise HTTPException(404, "Task not found")
+    if not task.integration or task.integration != "radarr":
+        raise HTTPException(404, "Task is not a Radarr-linked task")
+    meta = task.integration_meta or {}
+
+    link = None
+    for lid in [meta.get("downloadLinkId")]:
+        if lid:
+            link = lid
+            break
+
+    return dict(
+        taskId=task.id,
+        radarrInstanceId=meta.get("instanceId", ""),
+        radarrInstanceName=meta.get("instanceName", ""),
+        radarrMovieId=meta.get("movieId", 0),
+        title=meta.get("movieTitle", task.title or task.url),
+        year=meta.get("movieYear"),
+        downloadStatus=task.status,
+        importStatus=meta.get("importStatus", "none"),
+        importMode=meta.get("importMode", "move"),
+        localFilePath=meta.get("localPath"),
+        radarrFilePath=meta.get("radarrPath"),
+        errorCode=meta.get("importError"),
+        errorMessage=task.error,
+        startedAt=task.created_at.isoformat() if task.created_at else None,
+        completedAt=task.completed_at.isoformat() if task.completed_at else None,
+    )
+
+
+@app.post("/api/radarr/tasks/{task_id}/import/retry", responses=_404, summary="Retry Radarr import", description="Retry a failed Radarr import for a task.", tags=["Radarr"])
+def retry_radarr_import(task_id: str):
+    with _lock:
+        task = _tasks.get(task_id)
+        if not task:
+            raise HTTPException(404, "Task not found")
+    if not task.integration or task.integration != "radarr":
+        raise HTTPException(404, "Task is not a Radarr-linked task")
+
+    meta = task.integration_meta or {}
+    meta["importStatus"] = "waiting_for_import"
+    meta.pop("importError", None)
+    _update_task(task_id, integration_meta=meta)
+    _broadcast("radarr_import_updated", {"taskId": task_id, "importStatus": "waiting_for_import"})
+    return OkResponse(ok=True)
+
+
+@app.post("/api/radarr/tasks/{task_id}/import/cancel", responses=_404, summary="Cancel Radarr import", description="Cancel a pending or in-progress Radarr import.", tags=["Radarr"])
+def cancel_radarr_import(task_id: str):
+    with _lock:
+        task = _tasks.get(task_id)
+        if not task:
+            raise HTTPException(404, "Task not found")
+    if not task.integration or task.integration != "radarr":
+        raise HTTPException(404, "Task is not a Radarr-linked task")
+
+    meta = task.integration_meta or {}
+    meta["importStatus"] = "cancelled"
+    _update_task(task_id, integration_meta=meta)
+    _broadcast("radarr_import_updated", {"taskId": task_id, "importStatus": "cancelled"})
+    return OkResponse(ok=True)
 
 
 @app.exception_handler(RequestValidationError)

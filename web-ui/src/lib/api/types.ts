@@ -195,3 +195,172 @@ export interface HealthResponse {
 }
 
 export interface PageArgs { limit?: number; offset?: number; }
+
+// ── Radarr ──────────────────────────────────────────────────────
+
+export type RadarrInstanceStatus = 'unknown' | 'connected' | 'warning' | 'error';
+export type RadarrImportStatus = 'none' | 'waiting_for_import' | 'importing' | 'imported' | 'failed';
+export type RadarrStorageState = 'local' | 'external_imported' | 'missing' | 'importing' | 'import_failed';
+
+export interface RadarrInstanceResponse {
+  id: string;
+  name: string;
+  baseUrl: string;
+  apiKeyPreview: string;
+  tubeWritePath: string;
+  radarrImportPath: string;
+  hostPathHint?: string | null;
+  defaultProfileId?: string | null;
+  defaultQualityProfileId?: number | null;
+  defaultRootFolderPath?: string | null;
+  importMode: string;
+  enabled: boolean;
+  isDefault: boolean;
+  status: RadarrInstanceStatus;
+  healthMessage?: string | null;
+  radarrVersion?: string | null;
+  lastSyncAt?: string | null;
+  lastTestAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RadarrInstanceUpsertRequest {
+  name: string;
+  baseUrl: string;
+  apiKey?: string | null;
+  tubeWritePath: string;
+  radarrImportPath: string;
+  hostPathHint?: string | null;
+  defaultProfileId?: string | null;
+  defaultQualityProfileId?: number | null;
+  defaultRootFolderPath?: string | null;
+  importMode?: string;
+  enabled?: boolean;
+}
+
+export interface RadarrInstanceTestRequest {
+  baseUrl?: string | null;
+  apiKey?: string | null;
+  tubeWritePath?: string | null;
+}
+
+export interface RadarrInstanceTestResponse {
+  ok: boolean;
+  canConnect: boolean;
+  apiKeyValid: boolean;
+  tubeWritePathWritable: boolean;
+  radarrRootFoldersLoaded: boolean;
+  radarrImportPathVisible?: boolean | null;
+  radarrVersion?: string | null;
+  warnings: string[];
+  errors: string[];
+}
+
+export interface RadarrSummaryResponse {
+  totalInstances: number;
+  activeConnections: number;
+  missingMovies: number;
+  monitoredMovies: number;
+  imports24h: number;
+  lastSyncAt?: string | null;
+  instanceStatuses: Record<string, number>;
+}
+
+export interface RadarrMissingMovie {
+  instanceId: string;
+  movieId: number;
+  title: string;
+  year?: number | null;
+  tmdbId?: number | null;
+  imdbId?: string | null;
+  monitored?: boolean | null;
+  hasFile?: boolean | null;
+  qualityProfileId?: number | null;
+  qualityProfileName?: string | null;
+  rootFolderPath?: string | null;
+  moviePath?: string | null;
+  posterUrl?: string | null;
+  overview?: string | null;
+  radarrUrl?: string | null;
+  localWorkflowStatus?: string | null;
+  linkedTaskId?: string | null;
+}
+
+export interface RadarrMissingMovieListResponse {
+  items: RadarrMissingMovie[];
+  total: number;
+  instance?: Record<string, unknown> | null;
+}
+
+export interface RadarrMovieDownloadRequest {
+  url: string;
+  instanceId?: string | null;
+  movieId?: number | null;
+  movieTitle?: string | null;
+  movieYear?: number | null;
+  profileId?: string | null;
+  downloadQualityMode?: string | null;
+  downloadQualityValue?: number | null;
+  downloadFormat?: string | null;
+  formatType?: string | null;
+  remuxTo?: string | null;
+  embedMetadata?: boolean | null;
+  embedThumbnail?: boolean | null;
+  subtitles?: boolean | null;
+  subtitleLangs?: string | null;
+}
+
+export interface RadarrTaskIntegrationResponse {
+  taskId: string;
+  radarrInstanceId: string;
+  radarrInstanceName: string;
+  radarrMovieId: number;
+  title: string;
+  year?: number | null;
+  downloadStatus: string;
+  importStatus: string;
+  importMode: string;
+  localFilePath?: string | null;
+  radarrFilePath?: string | null;
+  radarrMovieUrl?: string | null;
+  commandId?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+}
+
+export interface RadarrRootFolder {
+  id: number;
+  path: string;
+  accessible: boolean;
+  freeSpace?: number | null;
+}
+
+export interface RadarrQualityProfile {
+  id: number;
+  name: string;
+}
+
+export interface RadarrQueueItem {
+  movieId: number;
+  movieTitle: string;
+  status: string;
+  size?: number | null;
+  progress?: number | null;
+}
+
+export interface TaskIntegration {
+  type: string;
+  instanceId: string;
+  instanceName: string;
+  movieId: number;
+  movieTitle: string;
+  movieYear?: number | null;
+  importStatus: RadarrImportStatus;
+  importMode?: string | null;
+  importError?: string | null;
+  radarrPath?: string | null;
+  localPath?: string | null;
+}

@@ -12,6 +12,7 @@
     ['profiles', 'i-user', 'Profiles'],
     ['settings', 'i-gear', 'Settings'],
     ['health', 'i-heart', 'Health'],
+    ['radarr-instances', 'i-radarr', 'Radarr'],
   ];
 
   function handleNav(key: string) {
@@ -22,6 +23,8 @@
       navigate('downloads');
     } else if (key === 'files') {
       navigate('files');
+    } else if (key === 'radarr-instances') {
+      navigate('radarr-instances');
     } else {
       onOpen(key);
     }
@@ -38,7 +41,7 @@
 
   <nav class="nav" aria-label="Main navigation">
     {#each items as [key, icon, label]}
-      <button class="nav-item" class:active={key === 'downloads' ? activePage === 'downloads' : key === 'files' ? activePage === 'files' : false}
+      <button class="nav-item" class:active={key === 'downloads' ? activePage === 'downloads' : key === 'files' ? activePage === 'files' : key === 'radarr-instances' ? activePage === 'radarr-instances' : false}
         type="button"
         on:click={() => handleNav(key)}
         title={label}>

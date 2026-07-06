@@ -11,6 +11,13 @@ from tube_explore.models import (
     QualityMode,
     AudioFormat,
     FormatType,
+    RadarrInstance,
+    RadarrInstanceCreate,
+    RadarrInstanceUpdate,
+    RadarrInstanceStats,
+    RadarrMissingMovieCache,
+    RadarrDownloadLink,
+    RadarrImportAttempt,
 )
 
 
@@ -37,6 +44,16 @@ def _row_to_profile(row: sqlite3.Row) -> Profile:
     d["created_at"] = datetime.fromisoformat(d["created_at"])
     d["updated_at"] = datetime.fromisoformat(d["updated_at"])
     return Profile(**d)
+
+
+def _row_to_radarr_instance(row: sqlite3.Row) -> RadarrInstance:
+    d = dict(row)
+    d["enabled"] = bool(d["enabled"])
+    d["is_default"] = bool(d["is_default"])
+    for ts_field in ("last_test_at", "last_sync_at", "created_at", "updated_at"):
+        if d.get(ts_field):
+            d[ts_field] = datetime.fromisoformat(d[ts_field])
+    return RadarrInstance(**d)
 
 
 def init_db() -> None:
@@ -72,6 +89,101 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS settings (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
+            );
+        """)
+
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS radarr_instances (
+                id                      TEXT PRIMARY KEY,
+                name                    TEXT NOT NULL UNIQUE,
+                base_url                TEXT NOT NULL,
+                api_key_encrypted       TEXT NOT NULL,
+                tube_write_path         TEXT NOT NULL,
+                radarr_import_path      TEXT NOT NULL,
+                host_path_hint          TEXT NULL,
+                default_profile_id      TEXT NULL,
+                default_quality_profile_id INTEGER NULL,
+                default_root_folder_path    TEXT NULL,
+                import_mode             TEXT NOT NULL DEFAULT 'move',
+                enabled                 INTEGER NOT NULL DEFAULT 1,
+                is_default              INTEGER NOT NULL DEFAULT 0,
+                last_test_status        TEXT NULL,
+                last_test_message       TEXT NULL,
+                last_test_at            TEXT NULL,
+                last_sync_status        TEXT NULL,
+                last_sync_message       TEXT NULL,
+                last_sync_at            TEXT NULL,
+                radarr_version          TEXT NULL,
+                created_at              TEXT NOT NULL,
+                updated_at              TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS radarr_instance_stats (
+                radarr_instance_id      TEXT PRIMARY KEY,
+                missing_count           INTEGER NOT NULL DEFAULT 0,
+                monitored_count         INTEGER NOT NULL DEFAULT 0,
+                unmonitored_missing_count INTEGER NOT NULL DEFAULT 0,
+                root_folder_count       INTEGER NOT NULL DEFAULT 0,
+                queue_count             INTEGER NOT NULL DEFAULT 0,
+                imports_24h             INTEGER NOT NULL DEFAULT 0,
+                last_sync_at            TEXT NULL,
+                updated_at              TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS radarr_missing_movie_cache (
+                radarr_instance_id      TEXT NOT NULL,
+                movie_id                INTEGER NOT NULL,
+                title                   TEXT NOT NULL,
+                year                    INTEGER NULL,
+                tmdb_id                 INTEGER NULL,
+                imdb_id                 TEXT NULL,
+                monitored               INTEGER NULL,
+                has_file                INTEGER NULL,
+                quality_profile_id      INTEGER NULL,
+                quality_profile_name    TEXT NULL,
+                root_folder_path        TEXT NULL,
+                movie_path              TEXT NULL,
+                poster_url              TEXT NULL,
+                overview                TEXT NULL,
+                cached_at               TEXT NOT NULL,
+                PRIMARY KEY (radarr_instance_id, movie_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS radarr_download_links (
+                id                      TEXT PRIMARY KEY,
+                task_id                 TEXT NOT NULL UNIQUE,
+                radarr_instance_id      TEXT NOT NULL,
+                radarr_movie_id         INTEGER NOT NULL,
+                title                   TEXT NOT NULL,
+                year                    INTEGER NULL,
+                tmdb_id                 INTEGER NULL,
+                imdb_id                 TEXT NULL,
+                source_url              TEXT NOT NULL,
+                local_staging_dir       TEXT NOT NULL,
+                radarr_staging_dir      TEXT NOT NULL,
+                local_final_file_path   TEXT NULL,
+                radarr_final_file_path  TEXT NULL,
+                created_at              TEXT NOT NULL,
+                updated_at              TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS radarr_import_attempts (
+                id                      TEXT PRIMARY KEY,
+                task_id                 TEXT NOT NULL,
+                radarr_instance_id      TEXT NOT NULL,
+                radarr_movie_id         INTEGER NOT NULL,
+                local_file_path         TEXT NULL,
+                radarr_file_path        TEXT NULL,
+                status                  TEXT NOT NULL,
+                import_mode             TEXT NOT NULL,
+                radarr_command_id       TEXT NULL,
+                radarr_movie_file_id    INTEGER NULL,
+                error_code              TEXT NULL,
+                error_message           TEXT NULL,
+                started_at              TEXT NULL,
+                completed_at            TEXT NULL,
+                created_at              TEXT NOT NULL,
+                updated_at              TEXT NOT NULL
             );
         """)
 
@@ -271,3 +383,126 @@ def set_settings(data: dict[str, str]) -> None:
     with _connect() as conn:
         for key, value in data.items():
             conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
+
+
+# ── Radarr Instance CRUD ────────────────────────────────────────
+
+
+def list_radarr_instances() -> list[RadarrInstance]:
+    with _connect() as conn:
+        rows = conn.execute("SELECT * FROM radarr_instances ORDER BY name").fetchall()
+    return [_row_to_radarr_instance(r) for r in rows]
+
+
+def get_radarr_instance(instance_id: str) -> RadarrInstance | None:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM radarr_instances WHERE id = ?", (instance_id,)).fetchone()
+    return _row_to_radarr_instance(row) if row else None
+
+
+def get_radarr_instance_by_name(name: str) -> RadarrInstance | None:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM radarr_instances WHERE name = ?", (name,)).fetchone()
+    return _row_to_radarr_instance(row) if row else None
+
+
+def create_radarr_instance(data: RadarrInstanceCreate) -> RadarrInstance:
+    import uuid
+    now = datetime.now(UTC).isoformat()
+    instance_id = str(uuid.uuid4())
+
+    with _connect() as conn:
+        existing = conn.execute("SELECT id FROM radarr_instances WHERE name = ?", (data.name,)).fetchone()
+        if existing:
+            raise ValueError(f"Radarr instance '{data.name}' already exists")
+
+        is_default = data.is_default
+        if is_default:
+            conn.execute("UPDATE radarr_instances SET is_default = 0")
+
+        conn.execute(
+            """INSERT INTO radarr_instances
+            (id, name, base_url, api_key_encrypted, tube_write_path, radarr_import_path,
+             host_path_hint, default_profile_id, default_quality_profile_id,
+             default_root_folder_path, import_mode, enabled, is_default,
+             created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (instance_id, data.name, data.base_url, data.api_key, data.tube_write_path,
+             data.radarr_import_path, data.host_path_hint, data.default_profile_id,
+             data.default_quality_profile_id, data.default_root_folder_path,
+             data.import_mode, int(data.enabled), int(is_default),
+             now, now),
+        )
+
+    result = get_radarr_instance(instance_id)
+    assert result is not None
+    return result
+
+
+def update_radarr_instance(instance_id: str, data: RadarrInstanceUpdate) -> RadarrInstance | None:
+    now = datetime.now(UTC).isoformat()
+    fields: list[str] = []
+    vals: list = []
+
+    for attr in data.model_dump(exclude_none=True):
+        db_col = attr
+        val = getattr(data, attr)
+        if isinstance(val, bool):
+            val = int(val)
+        fields.append(f"{db_col} = ?")
+        vals.append(val)
+
+    if not fields:
+        return get_radarr_instance(instance_id)
+
+    fields.append("updated_at = ?")
+    vals.append(now)
+    vals.append(instance_id)
+
+    with _connect() as conn:
+        if data.is_default:
+            conn.execute("UPDATE radarr_instances SET is_default = 0")
+        conn.execute(f"UPDATE radarr_instances SET {', '.join(fields)} WHERE id = ?", vals)
+    conn.close()
+
+    return get_radarr_instance(instance_id)
+
+
+def delete_radarr_instance(instance_id: str) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM radarr_instance_stats WHERE radarr_instance_id = ?", (instance_id,))
+        conn.execute("DELETE FROM radarr_missing_movie_cache WHERE radarr_instance_id = ?", (instance_id,))
+        conn.execute("DELETE FROM radarr_instances WHERE id = ?", (instance_id,))
+
+
+def set_radarr_instance_test_result(instance_id: str, status: str, message: str | None, version: str | None = None) -> None:
+    now = datetime.now(UTC).isoformat()
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE radarr_instances SET last_test_status = ?, last_test_message = ?, last_test_at = ?, radarr_version = COALESCE(?, radarr_version), updated_at = ? WHERE id = ?",
+            (status, message, now, version, now, instance_id),
+        )
+
+
+def set_radarr_instance_sync_result(instance_id: str, status: str, message: str | None = None) -> None:
+    now = datetime.now(UTC).isoformat()
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE radarr_instances SET last_sync_status = ?, last_sync_message = ?, last_sync_at = ?, updated_at = ? WHERE id = ?",
+            (status, message, now, now, instance_id),
+        )
+
+
+def upsert_radarr_instance_stats(instance_id: str, stats: dict) -> None:
+    now = datetime.now(UTC).isoformat()
+    with _connect() as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO radarr_instance_stats
+            (radarr_instance_id, missing_count, monitored_count, unmonitored_missing_count,
+             root_folder_count, queue_count, imports_24h, last_sync_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (instance_id, stats.get("missing_count", 0), stats.get("monitored_count", 0),
+             stats.get("unmonitored_missing_count", 0), stats.get("root_folder_count", 0),
+             stats.get("queue_count", 0), stats.get("imports_24h", 0),
+             stats.get("last_sync_at"), now),
+        )
