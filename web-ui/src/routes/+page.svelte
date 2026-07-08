@@ -23,6 +23,13 @@
   import RadarrSettings from '$lib/components/radarr/RadarrSettings.svelte';
   import MissingMovies from '$lib/components/radarr/MissingMovies.svelte';
   import RadarrSearchContext from '$lib/components/radarr/RadarrSearchContext.svelte';
+  import InstancesOverview from '$lib/components/arr/InstancesOverview.svelte';
+  import SonarrInstances from '$lib/components/arr/SonarrInstances.svelte';
+  import SonarrInstanceForm from '$lib/components/arr/SonarrInstanceForm.svelte';
+  import SettingsIntegrations from '$lib/components/arr/SettingsIntegrations.svelte';
+  import MissingEpisodes from '$lib/components/arr/MissingEpisodes.svelte';
+  import SonarrEpisodeSearchContext from '$lib/components/arr/SonarrEpisodeSearchContext.svelte';
+  import SonarrPlaylistMapping from '$lib/components/arr/SonarrPlaylistMapping.svelte';
   import { searchMedia } from '$lib/api/search';
   import { getMetadata } from '$lib/api/metadata';
   import { getPlaylist } from '$lib/api/playlist';
@@ -47,7 +54,7 @@
   let transitioning = false;
 
   function navigate(page: string, data?: any) {
-    if (page === 'home' || page === 'downloads' || page === 'files' || page.startsWith('radarr-') || page === 'missing-movies') {
+    if (page === 'home' || page === 'downloads' || page === 'files' || page.startsWith('radarr-') || page === 'missing-movies' || page === 'radarr-search-context' || page.startsWith('sonarr-') || page === 'sonarr-search-context' || page === 'sonarr-playlist-mapping' || page.startsWith('instances') || page === 'settings-integrations' || page === 'missing-episodes') {
       if (data) pageData = data;
       currentPage = page;
     }
@@ -133,6 +140,22 @@
     <MissingMovies {navigate} instance={pageData.instance ?? null} />
   {:else if currentPage === 'radarr-search-context'}
     <RadarrSearchContext {navigate} instance={pageData.instance} movie={pageData.movie} presetUrl={pageData.presetUrl || ''} />
+  {:else if currentPage === 'instances'}
+    <InstancesOverview {navigate} />
+  {:else if currentPage === 'instances-radarr'}
+    <RadarrInstances {navigate} />
+  {:else if currentPage === 'instances-sonarr'}
+    <SonarrInstances {navigate} />
+  {:else if currentPage === 'sonarr-instance-form'}
+    <SonarrInstanceForm {navigate} instance={pageData.instance ?? null} />
+  {:else if currentPage === 'missing-episodes'}
+    <MissingEpisodes {navigate} instance={pageData.instance ?? null} />
+  {:else if currentPage === 'sonarr-search-context'}
+    <SonarrEpisodeSearchContext {navigate} instance={pageData.instance} episode={pageData.episode} presetUrl={pageData.presetUrl || ''} />
+  {:else if currentPage === 'sonarr-playlist-mapping'}
+    <SonarrPlaylistMapping {navigate} mappingData={pageData.mapping ?? null} />
+  {:else if currentPage === 'settings-integrations'}
+    <SettingsIntegrations {navigate} />
   {/if}
 </AppShell>
 

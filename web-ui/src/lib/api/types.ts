@@ -179,8 +179,8 @@ export interface ProfileResponse extends Required<Pick<ProfileCreateRequest, 'na
   updatedAt: string;
 }
 
-export interface SettingsResponse { rateLimit: string; tempDirectory: string; retryCount: number; socketTimeout: number; }
-export interface SettingsUpdateRequest { rateLimit?: string | null; tempDirectory?: string | null; retryCount?: number | null; socketTimeout?: number | null; }
+export interface SettingsResponse { rateLimit: string; tempDirectory: string; retryCount: number; socketTimeout: number; maxParallelDownloads: number; }
+export interface SettingsUpdateRequest { rateLimit?: string | null; tempDirectory?: string | null; retryCount?: number | null; socketTimeout?: number | null; maxParallelDownloads?: number | null; }
 
 export interface HealthResponse {
   status: string;
@@ -363,4 +363,210 @@ export interface TaskIntegration {
   importError?: string | null;
   radarrPath?: string | null;
   localPath?: string | null;
+}
+
+// ── Arr (unified Radarr + Sonarr) ────────────────────────────────
+
+export type ArrKind = 'radarr' | 'sonarr';
+
+export interface ArrInstanceResponse {
+  id: string;
+  kind: ArrKind;
+  name: string;
+  baseUrl: string;
+  apiKeyPreview: string;
+  tubeWritePath: string;
+  arrImportPath: string;
+  hostPathHint?: string | null;
+  defaultProfileId?: string | null;
+  defaultQualityProfileId?: number | null;
+  defaultRootFolderPath?: string | null;
+  importMode: string;
+  enabled: boolean;
+  isDefault: boolean;
+  status: string;
+  healthMessage?: string | null;
+  arrVersion?: string | null;
+  lastSyncAt?: string | null;
+  lastTestAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ArrInstanceUpsertRequest {
+  kind: ArrKind;
+  name: string;
+  baseUrl: string;
+  apiKey?: string | null;
+  tubeWritePath: string;
+  arrImportPath: string;
+  hostPathHint?: string | null;
+  defaultProfileId?: string | null;
+  defaultQualityProfileId?: number | null;
+  defaultRootFolderPath?: string | null;
+  importMode?: string;
+  enabled?: boolean;
+}
+
+export interface ArrInstanceTestRequest {
+  baseUrl?: string | null;
+  apiKey?: string | null;
+  tubeWritePath?: string | null;
+}
+
+export interface ArrInstanceTestResponse {
+  ok: boolean;
+  canConnect: boolean;
+  apiKeyValid: boolean;
+  tubeWritePathWritable: boolean;
+  rootFoldersLoaded: boolean;
+  arrVersion?: string | null;
+  warnings: string[];
+  errors: string[];
+}
+
+export interface ArrSummaryResponse {
+  totalInstances: number;
+  activeConnections: number;
+  missingItems: number;
+  monitoredItems: number;
+  imports24h: number;
+  lastSyncAt?: string | null;
+  instanceStatuses: Record<string, number>;
+}
+
+export interface ArrMissingItem {
+  instanceId: string;
+  itemId: number;
+  kind: ArrKind;
+  title: string;
+  seriesTitle?: string | null;
+  seasonNumber?: number | null;
+  episodeNumber?: number | null;
+  seriesId?: number | null;
+  year?: number | null;
+  tmdbId?: number | null;
+  imdbId?: string | null;
+  monitored?: boolean | null;
+  hasFile?: boolean | null;
+  qualityProfileId?: number | null;
+  qualityProfileName?: string | null;
+  rootFolderPath?: string | null;
+  itemPath?: string | null;
+  posterUrl?: string | null;
+  overview?: string | null;
+  airDate?: string | null;
+  arrUrl?: string | null;
+  localWorkflowStatus?: string | null;
+  linkedTaskId?: string | null;
+}
+
+export interface ArrMissingItemListResponse {
+  items: ArrMissingItem[];
+  total: number;
+  instance?: Record<string, unknown> | null;
+}
+
+export interface ArrDownloadRequest {
+  kind?: ArrKind | null;
+  url: string;
+  instanceId?: string | null;
+  itemId?: number | null;
+  itemTitle?: string | null;
+  itemYear?: number | null;
+  profileId?: string | null;
+  downloadQualityMode?: string | null;
+  downloadQualityValue?: number | null;
+  downloadFormat?: string | null;
+  formatType?: string | null;
+  remuxTo?: string | null;
+  embedMetadata?: boolean | null;
+  embedThumbnail?: boolean | null;
+  subtitles?: boolean | null;
+  subtitleLangs?: string | null;
+}
+
+export interface ArrTaskIntegrationResponse {
+  taskId: string;
+  arrInstanceId: string;
+  arrInstanceName: string;
+  arrItemId: number;
+  kind: ArrKind;
+  title: string;
+  year?: number | null;
+  downloadStatus: string;
+  importStatus: string;
+  importMode: string;
+  localFilePath?: string | null;
+  arrFilePath?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+}
+
+// ── Sonarr-specific ──────────────────────────────────────────────
+
+export interface SonarrSeries {
+  id: number;
+  title: string;
+  year?: number | null;
+  tvdbId?: number | null;
+  imdbId?: string | null;
+  images?: Array<{ coverType: string; url: string }> | null;
+  overview?: string | null;
+  monitored: boolean;
+  seasonCount: number;
+  status?: string | null;
+  network?: string | null;
+  path?: string | null;
+  qualityProfileId?: number | null;
+  rootFolderPath?: string | null;
+}
+
+export interface SonarrEpisode {
+  id: number;
+  seriesId?: number | null;
+  episodeNumber?: number | null;
+  seasonNumber?: number | null;
+  title?: string | null;
+  overview?: string | null;
+  airDate?: string | null;
+  monitored: boolean;
+  hasFile: boolean;
+  seriesTitle?: string | null;
+  images?: Array<{ coverType: string; url: string }> | null;
+}
+
+export interface SonarrEpisodeFile {
+  id: number;
+  seriesId: number;
+  seasonNumber: number;
+  relativePath?: string | null;
+  path?: string | null;
+  size: number;
+  dateAdded?: string | null;
+  quality?: { quality: { name: string }; revision: Record<string, unknown> } | null;
+  mediaInfo?: Record<string, unknown> | null;
+}
+
+export interface SonarrRootFolder {
+  id: number;
+  path: string;
+  accessible: boolean;
+  freeSpace?: number | null;
+}
+
+export interface SonarrQualityProfile {
+  id: number;
+  name: string;
+}
+
+export interface SonarrQueueItem {
+  seriesId: number;
+  seriesTitle: string;
+  episodeId: number;
+  status: string;
+  size?: number | null;
+  progress?: number | null;
 }

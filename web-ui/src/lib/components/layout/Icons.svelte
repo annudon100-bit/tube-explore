@@ -146,5 +146,11 @@
     <symbol id="i-trash" viewBox="0 0 24 24">
       <path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
     </symbol>
+
+    <symbol id="i-sonarr" viewBox="0 0 24 24">
+      <rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
+      <circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/>
+      <path d="M12 7V5M12 19v-2M17 12h2M5 12h2M15.5 8.5l1.5-1.5M7 17l1.5-1.5M15.5 15.5l1.5 1.5M7 7l1.5 1.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+    </symbol>
   </defs>
 </svg>

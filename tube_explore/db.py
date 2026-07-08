@@ -2,6 +2,13 @@ import os
 import sqlite3
 from datetime import UTC, datetime
 
+from tube_explore.arr import db as arr_db
+from tube_explore.arr.models import (
+    ArrInstance,
+    ArrInstanceCreate,
+    ArrInstanceUpdate,
+    ArrInstanceStats,
+)
 from tube_explore.config import get_config_dir, get_db_path
 from tube_explore.models import (
     SEED_PROFILES,
@@ -187,11 +194,14 @@ def init_db() -> None:
             );
         """)
 
-        for key in ("rate_limit", "temp_directory", "retry_count", "socket_timeout"):
+        for key in ("rate_limit", "temp_directory", "retry_count", "socket_timeout", "max_parallel_downloads"):
             conn.execute(
                 "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
-                (key, {"rate_limit": "", "temp_directory": "/temp", "retry_count": "3", "socket_timeout": "30"}[key]),
+                (key, {"rate_limit": "", "temp_directory": "/temp", "retry_count": "3", "socket_timeout": "30", "max_parallel_downloads": "2"}[key]),
             )
+
+        arr_db.create_tables(conn)
+        arr_db.migrate_from_radarr_tables(conn)
 
         _migrate_profiles(conn)
         _seed_profiles(conn)
@@ -385,124 +395,113 @@ def set_settings(data: dict[str, str]) -> None:
             conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
 
 
-# ── Radarr Instance CRUD ────────────────────────────────────────
+# ── Arr / Radarr ↔ model conversion ─────────────────────────────
+
+
+def _arr_to_radarr_instance(inst: ArrInstance) -> RadarrInstance:
+    return RadarrInstance(
+        id=inst.id,
+        name=inst.name,
+        base_url=inst.base_url,
+        api_key_encrypted=inst.api_key_encrypted,
+        tube_write_path=inst.tube_write_path,
+        radarr_import_path=inst.arr_import_path,
+        host_path_hint=inst.host_path_hint,
+        default_profile_id=inst.default_profile_id,
+        default_quality_profile_id=inst.default_quality_profile_id,
+        default_root_folder_path=inst.default_root_folder_path,
+        import_mode=inst.import_mode,
+        enabled=inst.enabled,
+        is_default=inst.is_default,
+        last_test_status=inst.last_test_status,
+        last_test_message=inst.last_test_message,
+        last_test_at=inst.last_test_at,
+        last_sync_status=inst.last_sync_status,
+        last_sync_message=inst.last_sync_message,
+        last_sync_at=inst.last_sync_at,
+        radarr_version=inst.arr_version,
+        created_at=inst.created_at,
+        updated_at=inst.updated_at,
+    )
+
+
+def _arr_create_to_radarr(data: ArrInstanceCreate) -> RadarrInstanceCreate:
+    return RadarrInstanceCreate(
+        name=data.name,
+        base_url=data.base_url,
+        api_key=data.api_key,
+        tube_write_path=data.tube_write_path,
+        radarr_import_path=data.arr_import_path,
+        host_path_hint=data.host_path_hint,
+        default_profile_id=data.default_profile_id,
+        default_quality_profile_id=data.default_quality_profile_id,
+        default_root_folder_path=data.default_root_folder_path,
+        import_mode=data.import_mode,
+        enabled=data.enabled,
+        is_default=data.is_default,
+    )
+
+
+# ── Radarr Instance CRUD (backward compat wrappers) ─────────────
 
 
 def list_radarr_instances() -> list[RadarrInstance]:
-    with _connect() as conn:
-        rows = conn.execute("SELECT * FROM radarr_instances ORDER BY name").fetchall()
-    return [_row_to_radarr_instance(r) for r in rows]
+    return [_arr_to_radarr_instance(i) for i in arr_db.list_arr_instances(kind="radarr")]
 
 
 def get_radarr_instance(instance_id: str) -> RadarrInstance | None:
-    with _connect() as conn:
-        row = conn.execute("SELECT * FROM radarr_instances WHERE id = ?", (instance_id,)).fetchone()
-    return _row_to_radarr_instance(row) if row else None
+    inst = arr_db.get_arr_instance(instance_id)
+    return _arr_to_radarr_instance(inst) if inst else None
 
 
 def get_radarr_instance_by_name(name: str) -> RadarrInstance | None:
-    with _connect() as conn:
-        row = conn.execute("SELECT * FROM radarr_instances WHERE name = ?", (name,)).fetchone()
-    return _row_to_radarr_instance(row) if row else None
+    inst = arr_db.get_arr_instance_by_name(name)
+    if inst and inst.kind == "radarr":
+        return _arr_to_radarr_instance(inst)
+    return None
 
 
 def create_radarr_instance(data: RadarrInstanceCreate) -> RadarrInstance:
-    import uuid
-    now = datetime.now(UTC).isoformat()
-    instance_id = str(uuid.uuid4())
-
-    with _connect() as conn:
-        existing = conn.execute("SELECT id FROM radarr_instances WHERE name = ?", (data.name,)).fetchone()
-        if existing:
-            raise ValueError(f"Radarr instance '{data.name}' already exists")
-
-        is_default = data.is_default
-        if is_default:
-            conn.execute("UPDATE radarr_instances SET is_default = 0")
-
-        conn.execute(
-            """INSERT INTO radarr_instances
-            (id, name, base_url, api_key_encrypted, tube_write_path, radarr_import_path,
-             host_path_hint, default_profile_id, default_quality_profile_id,
-             default_root_folder_path, import_mode, enabled, is_default,
-             created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (instance_id, data.name, data.base_url, data.api_key, data.tube_write_path,
-             data.radarr_import_path, data.host_path_hint, data.default_profile_id,
-             data.default_quality_profile_id, data.default_root_folder_path,
-             data.import_mode, int(data.enabled), int(is_default),
-             now, now),
-        )
-
-    result = get_radarr_instance(instance_id)
-    assert result is not None
-    return result
+    arr_data = ArrInstanceCreate(
+        name=data.name,
+        base_url=data.base_url,
+        api_key=data.api_key,
+        kind="radarr",
+        tube_write_path=data.tube_write_path,
+        arr_import_path=data.radarr_import_path,
+        host_path_hint=data.host_path_hint,
+        default_profile_id=data.default_profile_id,
+        default_quality_profile_id=data.default_quality_profile_id,
+        default_root_folder_path=data.default_root_folder_path,
+        import_mode=data.import_mode,
+        enabled=data.enabled,
+        is_default=data.is_default,
+    )
+    inst = arr_db.create_arr_instance(arr_data)
+    return _arr_to_radarr_instance(inst)
 
 
 def update_radarr_instance(instance_id: str, data: RadarrInstanceUpdate) -> RadarrInstance | None:
-    now = datetime.now(UTC).isoformat()
-    fields: list[str] = []
-    vals: list = []
-
-    for attr in data.model_dump(exclude_none=True):
-        db_col = attr
-        val = getattr(data, attr)
-        if isinstance(val, bool):
-            val = int(val)
-        fields.append(f"{db_col} = ?")
-        vals.append(val)
-
-    if not fields:
-        return get_radarr_instance(instance_id)
-
-    fields.append("updated_at = ?")
-    vals.append(now)
-    vals.append(instance_id)
-
-    with _connect() as conn:
-        if data.is_default:
-            conn.execute("UPDATE radarr_instances SET is_default = 0")
-        conn.execute(f"UPDATE radarr_instances SET {', '.join(fields)} WHERE id = ?", vals)
-    conn.close()
-
-    return get_radarr_instance(instance_id)
+    # Map radarr_import_path → arr_import_path if present
+    arr_data_kwargs = data.model_dump(exclude_none=True)
+    if "radarr_import_path" in arr_data_kwargs:
+        arr_data_kwargs["arr_import_path"] = arr_data_kwargs.pop("radarr_import_path")
+    arr_data = ArrInstanceUpdate(**arr_data_kwargs)
+    inst = arr_db.update_arr_instance(instance_id, arr_data)
+    return _arr_to_radarr_instance(inst) if inst else None
 
 
 def delete_radarr_instance(instance_id: str) -> None:
-    with _connect() as conn:
-        conn.execute("DELETE FROM radarr_instance_stats WHERE radarr_instance_id = ?", (instance_id,))
-        conn.execute("DELETE FROM radarr_missing_movie_cache WHERE radarr_instance_id = ?", (instance_id,))
-        conn.execute("DELETE FROM radarr_instances WHERE id = ?", (instance_id,))
+    arr_db.delete_arr_instance(instance_id)
 
 
 def set_radarr_instance_test_result(instance_id: str, status: str, message: str | None, version: str | None = None) -> None:
-    now = datetime.now(UTC).isoformat()
-    with _connect() as conn:
-        conn.execute(
-            "UPDATE radarr_instances SET last_test_status = ?, last_test_message = ?, last_test_at = ?, radarr_version = COALESCE(?, radarr_version), updated_at = ? WHERE id = ?",
-            (status, message, now, version, now, instance_id),
-        )
+    arr_db.set_arr_instance_test_result(instance_id, status, message, version)
 
 
 def set_radarr_instance_sync_result(instance_id: str, status: str, message: str | None = None) -> None:
-    now = datetime.now(UTC).isoformat()
-    with _connect() as conn:
-        conn.execute(
-            "UPDATE radarr_instances SET last_sync_status = ?, last_sync_message = ?, last_sync_at = ?, updated_at = ? WHERE id = ?",
-            (status, message, now, now, instance_id),
-        )
+    arr_db.set_arr_instance_sync_result(instance_id, status, message)
 
 
 def upsert_radarr_instance_stats(instance_id: str, stats: dict) -> None:
-    now = datetime.now(UTC).isoformat()
-    with _connect() as conn:
-        conn.execute(
-            """INSERT OR REPLACE INTO radarr_instance_stats
-            (radarr_instance_id, missing_count, monitored_count, unmonitored_missing_count,
-             root_folder_count, queue_count, imports_24h, last_sync_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (instance_id, stats.get("missing_count", 0), stats.get("monitored_count", 0),
-             stats.get("unmonitored_missing_count", 0), stats.get("root_folder_count", 0),
-             stats.get("queue_count", 0), stats.get("imports_24h", 0),
-             stats.get("last_sync_at"), now),
-        )
+    arr_db.upsert_arr_instance_stats(instance_id, stats)

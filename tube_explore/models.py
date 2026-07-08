@@ -146,6 +146,7 @@ class SettingsDict(BaseModel):
     temp_directory: str = ""
     retry_count: int = 3
     socket_timeout: int = 30
+    max_parallel_downloads: int = 2
 
 
 class TaskInfo(BaseModel):

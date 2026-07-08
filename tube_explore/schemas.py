@@ -430,6 +430,7 @@ class SettingsResponse(BaseModel):
     temp_directory: str = ""
     retry_count: int = 3
     socket_timeout: int = 30
+    max_parallel_downloads: int = 2
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -439,6 +440,7 @@ class SettingsUpdateRequest(BaseModel):
     temp_directory: str | None = None
     retry_count: int | None = None
     socket_timeout: int | None = None
+    max_parallel_downloads: int | None = None
 
 
 # ── Health ────────────────────────────────────────────────────
@@ -643,14 +645,19 @@ class TaskIntegration(BaseModel):
     type: str = "radarr"
     instance_id: str
     instance_name: str
-    movie_id: int
-    movie_title: str
+    movie_id: int = 0
+    movie_title: str = ""
     movie_year: int | None = None
     import_status: str = "none"
     import_mode: str | None = None
     import_error: str | None = None
     radarr_path: str | None = None
     local_path: str | None = None
+    item_id: int | None = None
+    season_number: int | None = None
+    episode_number: int | None = None
+    series_id: int | None = None
+    series_title: str | None = None
 
 
 class ErrorResponse(BaseModel):

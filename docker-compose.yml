@@ -8,6 +8,7 @@ services:
       DOWNLOAD_DIRECTORY: /app/downloads
     volumes:
       - ./downloads:/app/downloads
+      - ./downloads/sonarr:/downloads/sonarr
       - ./config:/app/config
       - ../temp:/temp
     networks:
@@ -26,6 +27,23 @@ services:
       - ./downloads/radarr:/not/regular/path
     networks:
       - tube-net
+      
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+    volumes:
+      - /home/prakhar/projects/sonarr-config:/config
+      - ./downloads/sonarr:/not/same/path
+    ports:
+      - 8989:8989
+    restart: unless-stopped
+    networks:
+      - tube-net
+
 
 networks:
   tube-net:

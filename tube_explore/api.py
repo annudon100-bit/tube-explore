@@ -24,6 +24,8 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from tube_explore import config, db, ytdlp
+from tube_explore.arr.routes import router as arr_router, _wire as _wire_arr_router
+from tube_explore.arr.routes import _arr_import_download
 from tube_explore.ytdlp import PauseError
 from tube_explore.models import (
     Profile,
@@ -140,6 +142,10 @@ app = FastAPI(
             "name": "Radarr",
             "description": "Radarr integration: manage instances, missing movies, imports, and linked downloads.",
         },
+        {
+            "name": "Arr",
+            "description": "Unified Arr integration: manage Radarr and Sonarr instances, missing items, imports, and linked downloads.",
+        },
     ],
 )
 
@@ -157,6 +163,18 @@ app.add_middleware(
 # ── Task store ───────────────────────────────────────────────
 _tasks: dict[str, TaskInfo] = {}
 _lock = threading.Lock()
+_download_semaphore = threading.Semaphore(2)
+
+
+def _update_download_semaphore():
+    max_par = 2
+    try:
+        raw = db.get_all_settings().get("max_parallel_downloads", "2")
+        max_par = max(1, int(raw))
+    except (ValueError, TypeError):
+        max_par = 2
+    global _download_semaphore
+    _download_semaphore = threading.Semaphore(max_par)
 
 
 # ── Global SSE event bus ─────────────────────────────────────
@@ -195,6 +213,10 @@ def _broadcast(event: str, data: dict) -> None:
             q.put_nowait((event, payload))
 
 
+_wire_arr_router(_tasks, _lock, _broadcast, _main_loop)
+app.include_router(arr_router)
+
+
 def _create_task(task_type: str, url: str, params: dict[str, object]) -> str:
     tid = str(uuid.uuid4())
     task = TaskInfo(
@@ -228,6 +250,8 @@ def _task_to_response(task: TaskInfo) -> dict[str, object]:
         for k, v in meta.items():
             normalized[_camel_to_snake(k)] = v
         normalized.setdefault("movie_title", "Unknown")
+        if normalized.get("item_id") and "movie_id" not in normalized:
+            normalized["movie_id"] = normalized["item_id"]
         dump["integration"] = TaskIntegration(type=integration_val, **normalized)
     return TaskResponse(**dump).model_dump(mode="json", by_alias=True)
 
@@ -257,88 +281,90 @@ def _run_in_background(tid: str, fn, *args, url: str | None = None, metadata_fet
     """
 
     def wrapper():
-        _update_task(tid, status="running", progress_percent=0)
-
-        # ── Pre-fetch metadata and cache thumbnail ─────────────
-        if url and not metadata_fetched:
-            try:
-                meta = ytdlp.get_metadata(url)
-                thumb_rel = ytdlp.cache_thumbnail(meta["id"], meta.get("thumbnail"))
-                meta_fields: dict[str, object] = {
-                    "title": meta.get("title"),
-                    "channel": meta.get("channel"),
-                    "duration": meta.get("duration"),
-                    "thumbnail_path": f"/api/{thumb_rel}" if thumb_rel else None,
-                }
-                if meta.get("formats"):
-                    meta_fields["format_info"] = meta["formats"]
-                _update_task(tid, **meta_fields)
-            except Exception as e:
-                logger.warning("Metadata pre-fetch failed for task %s: %s", tid, e)
-
-        # ── Pre-fetch playlist video titles and thumbnails ────
-        _playlist_titles: dict[int, str] = {}
-        _playlist_thumbnails: dict[int, str] = {}
-        if url and ("playlist" in url or "list=" in url):
-            try:
-                entries = ytdlp.get_playlist_info(url)
-                for i, e in enumerate(entries):
-                    _playlist_titles[i] = e.get("title") or f"Video {i+1}"
-                    thumb = e.get("thumbnail_url")
-                    if thumb:
-                        _playlist_thumbnails[i] = thumb
-                fp = [
-                    {"index": i, "title": _playlist_titles[i], "thumbnailUrl": _playlist_thumbnails.get(i)}
-                    for i in range(len(entries))
-                ]
-                _update_task(tid, file_progress=fp, total_items=len(fp))
-            except Exception as e:
-                logger.warning("Failed to pre-fetch playlist entries for task %s: %s", tid, e)
-
-        # ── Progress callback ────────────────────────────────
-        _start_time = datetime.now(UTC)
-
-        def _progress(percent: int, file_progress_list: list[dict] | None = None, extra: dict | None = None):
-            nonlocal _start_time
-            elapsed = int((datetime.now(UTC) - _start_time).total_seconds())
-            update: dict[str, object] = {"progress_percent": percent, "elapsed": elapsed}
-            if file_progress_list is not None:
-                if _playlist_titles:
-                    for fp in file_progress_list:
-                        idx = fp.get("index")
-                        if idx is not None:
-                            if not fp.get("title") and idx in _playlist_titles:
-                                fp["title"] = _playlist_titles[idx]
-                            if not fp.get("thumbnailUrl") and idx in _playlist_thumbnails:
-                                fp["thumbnailUrl"] = _playlist_thumbnails[idx]
-                update["file_progress"] = file_progress_list
-            if extra:
-                step = extra.get("step")
-                if step:
-                    update["progress_step"] = step
-                db_bytes = extra.get("downloaded_bytes")
-                if db_bytes is not None:
-                    update["downloaded_bytes"] = db_bytes
-                tb = extra.get("total_bytes")
-                if tb is not None:
-                    update["total_bytes"] = tb
-                spd = extra.get("speed")
-                if spd:
-                    update["speed"] = spd
-                eta_val = extra.get("eta")
-                if eta_val:
-                    update["eta"] = eta_val
-                ci = extra.get("current_index")
-                if ci is not None:
-                    update["current_index"] = ci
-                ti = extra.get("total_items")
-                if ti is not None:
-                    update["total_items"] = ti
-            logger.info("_progress: extra=%s update=%s", extra, update)
-            _update_task(tid, **update)
-
-        kwargs["progress_callback"] = _progress
+        _download_semaphore.acquire(blocking=True, timeout=None)
         try:
+            _update_task(tid, status="running", progress_percent=0)
+
+            # ── Pre-fetch metadata and cache thumbnail ─────────────
+            if url and not metadata_fetched:
+                try:
+                    meta = ytdlp.get_metadata(url)
+                    thumb_rel = ytdlp.cache_thumbnail(meta["id"], meta.get("thumbnail"))
+                    meta_fields: dict[str, object] = {
+                        "title": meta.get("title"),
+                        "channel": meta.get("channel"),
+                        "duration": meta.get("duration"),
+                        "thumbnail_path": f"/api/{thumb_rel}" if thumb_rel else None,
+                    }
+                    if meta.get("formats"):
+                        meta_fields["format_info"] = meta["formats"]
+                    _update_task(tid, **meta_fields)
+                except Exception as e:
+                    logger.warning("Metadata pre-fetch failed for task %s: %s", tid, e)
+
+            # ── Pre-fetch playlist video titles and thumbnails ────
+            _playlist_titles: dict[int, str] = {}
+            _playlist_thumbnails: dict[int, str] = {}
+            if url and ("playlist" in url or "list=" in url):
+                try:
+                    entries = ytdlp.get_playlist_info(url)
+                    for i, e in enumerate(entries):
+                        _playlist_titles[i] = e.get("title") or f"Video {i+1}"
+                        thumb = e.get("thumbnail_url")
+                        if thumb:
+                            _playlist_thumbnails[i] = thumb
+                    fp = [
+                        {"index": i, "title": _playlist_titles[i], "thumbnailUrl": _playlist_thumbnails.get(i)}
+                        for i in range(len(entries))
+                    ]
+                    _update_task(tid, file_progress=fp, total_items=len(fp))
+                except Exception as e:
+                    logger.warning("Failed to pre-fetch playlist entries for task %s: %s", tid, e)
+
+            # ── Progress callback ────────────────────────────────
+            _start_time = datetime.now(UTC)
+
+            def _progress(percent: int, file_progress_list: list[dict] | None = None, extra: dict | None = None):
+                nonlocal _start_time
+                elapsed = int((datetime.now(UTC) - _start_time).total_seconds())
+                update: dict[str, object] = {"progress_percent": percent, "elapsed": elapsed}
+                if file_progress_list is not None:
+                    if _playlist_titles:
+                        for fp in file_progress_list:
+                            idx = fp.get("index")
+                            if idx is not None:
+                                if not fp.get("title") and idx in _playlist_titles:
+                                    fp["title"] = _playlist_titles[idx]
+                                if not fp.get("thumbnailUrl") and idx in _playlist_thumbnails:
+                                    fp["thumbnailUrl"] = _playlist_thumbnails[idx]
+                    update["file_progress"] = file_progress_list
+                if extra:
+                    step = extra.get("step")
+                    if step:
+                        update["progress_step"] = step
+                    db_bytes = extra.get("downloaded_bytes")
+                    if db_bytes is not None:
+                        update["downloaded_bytes"] = db_bytes
+                    tb = extra.get("total_bytes")
+                    if tb is not None:
+                        update["total_bytes"] = tb
+                    spd = extra.get("speed")
+                    if spd:
+                        update["speed"] = spd
+                    eta_val = extra.get("eta")
+                    if eta_val:
+                        update["eta"] = eta_val
+                    ci = extra.get("current_index")
+                    if ci is not None:
+                        update["current_index"] = ci
+                    ti = extra.get("total_items")
+                    if ti is not None:
+                        update["total_items"] = ti
+                logger.info("_progress: extra=%s update=%s", extra, update)
+                _update_task(tid, **update)
+
+            kwargs["progress_callback"] = _progress
+
             result = fn(*args, **kwargs)
             with _lock:
                 task = _tasks.get(tid)
@@ -350,7 +376,10 @@ def _run_in_background(tid: str, fn, *args, url: str | None = None, metadata_fet
             files = result.get("files")
             if files:
                 _update_task(tid, status="completed", result=files, progress_percent=100)
-                _radarr_import_download(tid, files)
+                with _lock:
+                    task = _tasks.get(tid)
+                if task and task.integration:
+                    _radarr_import_download(tid, files)
             else:
                 _update_task(tid, status="completed", progress_percent=100)
         except PauseError:
@@ -361,6 +390,8 @@ def _run_in_background(tid: str, fn, *args, url: str | None = None, metadata_fet
                 if task and task.status == "cancelled":
                     return
             _update_task(tid, status="failed", error=str(e), progress_percent=100)
+        finally:
+            _download_semaphore.release()
 
     t = threading.Thread(target=wrapper, daemon=True, name="download-worker")
     t.start()
@@ -370,87 +401,7 @@ def _run_in_background(tid: str, fn, *args, url: str | None = None, metadata_fet
 
 
 def _radarr_import_download(tid: str, files: list[dict]):
-    """After a Radarr-linked download completes, copy the file into the
-    movie's subdirectory under tube_write_path, trigger a refresh+rescan,
-    then query Radarr for the final movie file path."""
-    with _lock:
-        task = _tasks.get(tid)
-        if not task or task.integration != "radarr":
-            return
-        meta = dict(task.integration_meta or {})
-    inst_id = meta.get("instanceId") or meta.get("instance_id", "")
-    movie_id = meta.get("movieId") or meta.get("movie_id", 0)
-    if not inst_id or not movie_id:
-        logger.info("radarr_import: no instance_id or movie_id in meta=%s", meta)
-        return
-
-    inst = _get_radarr_instance(inst_id)
-    if not inst:
-        return
-    if not files:
-        return
-
-    local_path = files[0].get("path", "") if isinstance(files[0], dict) else str(files[0])
-    if not local_path:
-        logger.info("radarr_import: no file path in result files=%s", files)
-        return
-
-    meta["importStatus"] = "importing"
-    _update_task(tid, integration_meta=meta)
-
-    try:
-        client = RadarrClient(inst.base_url, inst.api_key_encrypted)
-        movie = client.get_movie(int(movie_id))
-        movie_path = movie.get("path", "")
-        if not movie_path:
-            raise RuntimeError(f"Radarr movie {movie_id} has no path")
-
-        # Derive relative subdirectory from movie's Radarr-side path
-        radarr_base = inst.radarr_import_path.rstrip("/")
-        subdir = movie_path
-        if radarr_base and movie_path.startswith(radarr_base):
-            subdir = movie_path[len(radarr_base):].lstrip("/")
-        tube_dest_dir = os.path.join(inst.tube_write_path, subdir)
-        dest = os.path.join(tube_dest_dir, os.path.basename(local_path))
-
-        os.makedirs(tube_dest_dir, exist_ok=True)
-        shutil.copy2(local_path, dest)
-        logger.info("radarr_import: copied %s → %s", local_path, dest)
-
-        meta["localPath"] = local_path
-        meta["importStatus"] = "waiting_for_import"
-        _update_task(tid, integration_meta=meta)
-    except Exception as e:
-        logger.error("radarr_import: copy failed: %s", e)
-        meta["importStatus"] = "failed"
-        meta["importError"] = f"copy_error: {e}"
-        _update_task(tid, integration_meta=meta)
-        _broadcast("radarr_import_updated", {"taskId": tid, "importStatus": "failed"})
-        return
-
-    try:
-        cmd = client.create_command("RefreshMovie", movieId=int(movie_id))
-        cmd_id = cmd.get("id", "")
-        logger.info("radarr_import: RefreshMovie command=%s", cmd_id)
-
-        # Query Radarr for the actual movie file path after import
-        time.sleep(3)
-        updated = client.get_movie(int(movie_id))
-        if updated.get("hasFile") and updated.get("movieFile"):
-            mf_path = updated["movieFile"].get("path") or updated["movieFile"].get("relativePath", "")
-            if mf_path:
-                meta["radarrPath"] = mf_path
-
-        meta["importStatus"] = "imported"
-        meta["radarrCommandId"] = str(cmd_id)
-        _update_task(tid, integration_meta=meta)
-        _broadcast("radarr_import_updated", {"taskId": tid, "importStatus": "imported"})
-    except Exception as e:
-        logger.error("radarr_import: trigger failed: %s", e)
-        meta["importStatus"] = "failed"
-        meta["importError"] = f"trigger_error: {e}"
-        _update_task(tid, integration_meta=meta)
-        _broadcast("radarr_import_updated", {"taskId": tid, "importStatus": "failed"})
+    _arr_import_download(tid, files)
 
 
 def _normalize_rel_path(path: str) -> str:
@@ -859,6 +810,7 @@ def update_settings(body: SettingsUpdateRequest):
     data = {k: str(v) for k, v in body.model_dump(exclude_none=True).items()}
     if data:
         db.set_settings(data)
+    _update_download_semaphore()
     return get_settings()
 
 
@@ -926,9 +878,9 @@ def list_files(
             thumbnail_base = task.thumbnail_path
         for f in (task.result or []):
             fp = f.get("path", "")
-            # Skip internal Radarr import copies (files written under a radarr/ subdirectory)
+            # Skip internal Arr import copies (files under radarr/ or sonarr/ subdirectories)
             rel = fp[len(download_base):].lstrip("/") if fp.startswith(download_base) else fp
-            if rel.startswith("radarr/"):
+            if rel.startswith("radarr/") or rel.startswith("sonarr/"):
                 continue
             file_type_val = f.get("fileType") or classify_file_type(fp)
             fmt = f.get("format") or classify_file_format(fp)
@@ -1051,8 +1003,12 @@ def list_tasks(
     if search:
         term = search.lower()
         results = [t for t in results if (t.get("title") or "").lower().find(term) >= 0 or t.get("url", "").lower().find(term) >= 0]
-    if integration == "radarr":
+    if integration == "sonarr":
+        results = [t for t in results if t.get("integration") and t["integration"].get("type") == "sonarr"]
+    elif integration == "radarr":
         results = [t for t in results if t.get("integration") and t["integration"].get("type") == "radarr"]
+    elif integration == "arr":
+        results = [t for t in results if t.get("integration") and t["integration"].get("type") in ("radarr", "sonarr")]
     elif integration == "none":
         results = [t for t in results if not t.get("integration")]
 

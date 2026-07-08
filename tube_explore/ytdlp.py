@@ -29,6 +29,11 @@ def _track_output_file(task_id: str, filepath: str) -> None:
         _task_output_files[task_id].append(filepath)
 
 
+def _extract_video_id(url: str) -> str | None:
+    m = re.search(r'(?:v=|youtu\.be/|/shorts/|/embed/|/v/)([a-zA-Z0-9_-]{11})', url)
+    return m.group(1) if m else None
+
+
 def _get_task_output_files(task_id: str) -> list[str]:
     with _task_output_files_lock:
         return list(_task_output_files.get(task_id, []))
@@ -54,7 +59,7 @@ _PROGRESS_PAT = re.compile(r"\[download\]\s+([\d.]+)%")
 _DEST_PAT = re.compile(r"\[download\] (?:Destination:\s+)?(?:temp=|home=)?(/.+)")
 _COMPLETE_PAT = re.compile(r"\[download\]\s+100%")
 _INFO_PAT = re.compile(r"\[info\] .+ Downloading \d+ format\(s\)")
-_MERGER_PAT = re.compile(r"\[Merger\] Merging formats into")
+_MERGER_PAT = re.compile(r'\[Merger\] Merging formats into "(.+?)"')
 _EXTRACT_AUDIO_PAT = re.compile(r"\[ExtractAudio\] Destination:")
 _REMUX_PAT = re.compile(r"\[VideoRemuxer\] Remuxing")
 _DELETE_ORIG_PAT = re.compile(r"Deleting original file")
@@ -190,12 +195,17 @@ def _run(
     capture: bool = True,
     progress_callback: Any | None = None,
     task_id: str | None = None,
+    file_complete_callback: Any | None = None,
+    temp_dir: str | None = None,
+    download_base: str | None = None,
 ) -> str | None:
     """Run yt-dlp. When capture=True, returns stdout (for metadata queries).
     When capture=False, streams output line-by-line for progress parsing.
     progress_callback(overall_percent: int, file_progress: list[dict], extra: dict | None)
     is called on each progress update. 'extra' contains: step, downloaded_bytes,
     total_bytes, speed, eta.
+    file_complete_callback(file_path: str, index: int) is called in a daemon thread
+    when each individual file reaches 100%.
     """
     bin_path = ensure_binary()
     cmd = [bin_path, "--no-warnings"] + args
@@ -215,6 +225,7 @@ def _run(
     fp_list: list[dict[str, Any]] = []
     current_index = 0
     fp_total = 1
+    _completed_indices: set[int] = set()
     current_phase = "fetching_metadata"
     prev_phase = "fetching_metadata"
     current_total_bytes: int | None = None
@@ -337,6 +348,16 @@ def _run(
                 idx = int(m.group(1))
                 total = int(m.group(2))
                 fp_total = total
+                # Fire callback for the previous file (idx>1 = at least one file done)
+                if idx > 1 and file_complete_callback:
+                    prev_idx = idx - 2
+                    if prev_idx not in _completed_indices:
+                        _ensure(prev_idx)
+                        prev_path = fp_list[prev_idx].get("path", "")
+                        if prev_path:
+                            _completed_indices.add(prev_idx)
+                            t = threading.Thread(target=file_complete_callback, args=(prev_path, prev_idx), daemon=True)
+                            t.start()
                 current_index = idx - 1
                 _ensure(total - 1)
                 fp_list[current_index]["status"] = "downloading"
@@ -348,11 +369,20 @@ def _run(
             m = _ALREADY_DL_PAT.search(line)
             if m:
                 _ensure(current_index)
-                fp_list[current_index]["title"] = _extract_title_from_path(m.group(1))
+                dest_path = m.group(1)
+                if temp_dir and download_base and dest_path.startswith(temp_dir):
+                    rel = os.path.relpath(dest_path, temp_dir)
+                    dest_path = os.path.normpath(os.path.join(download_base, rel))
+                fp_list[current_index]["title"] = _extract_title_from_path(dest_path)
+                fp_list[current_index]["path"] = dest_path
                 fp_list[current_index]["percent"] = 100.0
                 fp_list[current_index]["status"] = "completed"
                 if task_id:
-                    _track_output_file(task_id, m.group(1))
+                    _track_output_file(task_id, dest_path)
+                if file_complete_callback and current_index not in _completed_indices:
+                    _completed_indices.add(current_index)
+                    t = threading.Thread(target=file_complete_callback, args=(dest_path, current_index), daemon=True)
+                    t.start()
                 _fire()
                 continue
 
@@ -360,26 +390,48 @@ def _run(
             m = _DEST_PAT.search(line)
             if m:
                 _ensure(current_index)
-                fp_list[current_index]["title"] = _extract_title_from_path(m.group(1))
+                dest_path = m.group(1)
+                # yt-dlp temp= prefix → file is in temp dir; resolve to final home dir
+                if temp_dir and download_base and dest_path.startswith(temp_dir):
+                    rel = os.path.relpath(dest_path, temp_dir)
+                    dest_path = os.path.normpath(os.path.join(download_base, rel))
+                fp_list[current_index]["title"] = _extract_title_from_path(dest_path)
+                fp_list[current_index]["path"] = dest_path
                 if task_id:
-                    _track_output_file(task_id, m.group(1))
+                    _track_output_file(task_id, dest_path)
                 current_downloaded_bytes = 0
                 current_total_bytes = None
                 _set_phase("downloading")
                 _fire()
                 continue
 
-            # ── Completing a file ────────────────────────────
+            # ── Completing a file stream ─────────────────────
             if _COMPLETE_PAT.search(line) and not _MERGER_PAT.search(line):
                 _ensure(current_index)
                 fp_list[current_index]["percent"] = 100.0
                 fp_list[current_index]["status"] = "completed"
+                # Callback fires when next playlist item starts or at process end
+                # (not here — this 100% may be a partial DASH stream)
                 _fire()
                 continue
 
             # ── Merging (DASH formats) ───────────────────────
-            if _MERGER_PAT.search(line):
+            m = _MERGER_PAT.search(line)
+            if m:
                 _set_phase("merging")
+                merger_path = m.group(1)
+                # Handle temp=/home= prefixes yt-dlp adds with -P
+                for prefix in ("temp=", "home="):
+                    if merger_path.startswith(prefix):
+                        merger_path = merger_path[len(prefix):]
+                        break
+                # yt-dlp may write the merged file to the temp dir first,
+                # then move it to the home dir. Convert temp path to final path.
+                if temp_dir and download_base and merger_path.startswith(temp_dir):
+                    rel = os.path.relpath(merger_path, temp_dir)
+                    merger_path = os.path.normpath(os.path.join(download_base, rel))
+                _ensure(current_index)
+                fp_list[current_index]["path"] = merger_path
                 _fire()
                 continue
 
@@ -410,6 +462,13 @@ def _run(
         if task_id and _pop_paused(task_id):
             _was_paused = True
             raise PauseError(f"Task {task_id} was paused")
+        # Fire callback for the last file (single downloads, or last file in playlist)
+        if file_complete_callback and fp_list and current_index >= 0 and current_index not in _completed_indices:
+            _completed_indices.add(current_index)
+            last_path = fp_list[current_index].get("path", "")
+            if last_path:
+                t = threading.Thread(target=file_complete_callback, args=(last_path, current_index), daemon=True)
+                t.start()
         if proc.returncode == 0:
             _set_phase("finalizing")
             _fire()
@@ -651,8 +710,14 @@ def _download_with_profile(
     download_base: str | None = None,
     temp_dir: str | None = None,
     continue_download: bool = False,
+    file_complete_callback: Any | None = None,
 ) -> dict[str, Any]:
     os.makedirs(output_dir, exist_ok=True)
+
+    existing = set()
+    for dirpath, _dirnames, filenames in os.walk(output_dir):
+        for fn in filenames:
+            existing.add(os.path.normpath(os.path.join(dirpath, fn)))
 
     effective_base = download_base or config.get_download_dir()
     rel_path = os.path.relpath(output_dir, effective_base)
@@ -682,15 +747,30 @@ def _download_with_profile(
     if video_range:
         args.insert(0, f"--playlist-items={video_range}")
 
-    _run(args, capture=False, progress_callback=progress_callback, task_id=task_id)
+    _run(args, capture=False, progress_callback=progress_callback, task_id=task_id,
+         file_complete_callback=file_complete_callback,
+         temp_dir=temp_dir, download_base=effective_base)
 
-    files = _collect_files(output_dir, is_playlist=is_playlist, audio_only=audio_only)
+    all_files = _collect_files(output_dir, is_playlist=is_playlist, audio_only=audio_only)
+    files = [f for f in all_files if os.path.normpath(f["path"]) not in existing]
+    if not files and all_files:
+        video_id = _extract_video_id(url)
+        if video_id:
+            files = [f for f in all_files if video_id in f.get("name", "")]
+        if not files:
+            files = [f for f in all_files if f.get("fileType") in ("video", "audio", "playlist")]
+        if not files:
+            files = all_files
     return {"files": files}
 
 
 def _collect_files(directory: str, is_playlist: bool = False, audio_only: bool = False) -> list[dict[str, Any]]:
     files: list[dict[str, Any]] = []
-    for dirpath, _dirnames, filenames in os.walk(directory):
+    for dirpath, dirnames, filenames in os.walk(directory):
+        rel = os.path.relpath(dirpath, directory)
+        if rel != "." and (rel.startswith("radarr") or rel.startswith("sonarr")):
+            dirnames[:] = []
+            continue
         for fn in sorted(filenames):
             path = os.path.join(dirpath, fn)
             ext = classify_file_extension(path)
@@ -856,6 +936,7 @@ def download_video(
     download_base: str | None = None,
     temp_dir: str | None = None,
     continue_download: bool = False,
+    file_complete_callback: Any | None = None,
 ) -> dict[str, Any]:
     if profile is None:
         profile = Profile(id=0, name="_adhoc", created_at=datetime.now(), updated_at=datetime.now())
@@ -875,6 +956,7 @@ def download_video(
         download_base=download_base,
         temp_dir=temp_dir,
         continue_download=continue_download,
+        file_complete_callback=file_complete_callback,
     )
 
 
@@ -894,6 +976,7 @@ def download_playlist(
     download_base: str | None = None,
     temp_dir: str | None = None,
     continue_download: bool = False,
+    file_complete_callback: Any | None = None,
 ) -> dict[str, Any]:
     if profile is None:
         profile = Profile(id=0, name="_adhoc", created_at=datetime.now(), updated_at=datetime.now())
@@ -915,4 +998,5 @@ def download_playlist(
         download_base=download_base,
         temp_dir=temp_dir,
         continue_download=continue_download,
+        file_complete_callback=file_complete_callback,
     )

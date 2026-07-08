@@ -20,6 +20,7 @@
     <div class="form-grid">
       <div class="field"><label>Rate limit</label><input class="input" bind:value={settings.rateLimit} placeholder="100K or 1M" /></div>
       <div class="field"><label>Temporary directory</label><input class="input" bind:value={settings.tempDirectory} /></div>
+      <div class="field"><label>Max parallel downloads</label><input class="input" type="number" min="1" bind:value={settings.maxParallelDownloads} /></div>
       <div class="field"><label>Retry count</label><input class="input" type="number" bind:value={settings.retryCount} /></div>
       <div class="field"><label>Socket timeout</label><input class="input" type="number" bind:value={settings.socketTimeout} /></div>
     </div>

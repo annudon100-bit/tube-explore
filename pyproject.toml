@@ -24,8 +24,9 @@ dependencies = [
     "mutagen",                     # Metadata embedding (--embed-thumbnail)
     "pycryptodomex",               # AES-128 HLS stream decryption
 
-    # Radarr integration
+    # Arr integration + API key encryption
     "httpx>=0.27",
+    "cryptography>=42.0",
 ]
 
 [project.optional-dependencies]
